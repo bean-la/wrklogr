@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bean/wrklogr/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -20,13 +21,26 @@ func main() {
 }
 
 func newRootCmd() *cobra.Command {
+	var configPath string
+
 	root := &cobra.Command{
 		Use:   "wrklogr",
 		Short: "Build a worklog from GitHub commits across private repos",
 		Long: `wrklogr fetches commits from configured GitHub repositories, clusters them
 into work sessions, and emits Markdown (and optionally JSON) reports.`,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Name() == "version" {
+				return nil
+			}
+			_, err := config.Load(configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return nil
+		},
 	}
 
+	root.PersistentFlags().StringVar(&configPath, "config", "", "Path to wrklogr TOML config")
 	root.AddCommand(newVersionCmd())
 	return root
 }
