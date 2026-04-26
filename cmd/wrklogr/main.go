@@ -128,6 +128,20 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				reportTZ = loadedTZ
 			}
 
+			authToken := strings.TrimSpace(token)
+			if authToken == "" {
+				authToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+			}
+			if authToken == "" {
+				authToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+			}
+			if !localMode && authToken == "" {
+				localMode = true
+				if len(localPaths) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "No GitHub token found; falling back to local git mode.")
+				}
+			}
+
 			merged := make([]session.Commit, 0, 128)
 			total := 0
 			if localMode {
@@ -177,14 +191,6 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", repoLabel, filtered)
 				}
 			} else {
-				authToken := strings.TrimSpace(token)
-				if authToken == "" {
-					authToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-				}
-				if authToken == "" {
-					authToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
-				}
-
 				client := ghclient.NewClient(authToken, nil)
 				ctx := context.Background()
 
