@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/bean/wrklogr/internal/config"
 	ghclient "github.com/bean/wrklogr/internal/github"
+	"github.com/bean/wrklogr/internal/localgit"
 	"github.com/bean/wrklogr/internal/session"
 	gh "github.com/google/go-github/v67/github"
 	"github.com/spf13/cobra"
@@ -77,6 +79,8 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var meOnly bool
 	var sessionGapInput string
 	var timezoneInput string
+	var localMode bool
+	var localPaths []string
 
 	cmd := &cobra.Command{
 		Use:   "report",
@@ -124,52 +128,100 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				reportTZ = loadedTZ
 			}
 
-			authToken := strings.TrimSpace(token)
-			if authToken == "" {
-				authToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-			}
-			if authToken == "" {
-				authToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
-			}
-
-			client := ghclient.NewClient(authToken, nil)
-			ctx := context.Background()
-
-			var viewer *ghclient.ViewerIdentity
-			if meOnly {
-				identity, identityErr := client.GetViewerIdentity(ctx)
-				if identityErr != nil {
-					return fmt.Errorf("resolve --me identity: %w", identityErr)
-				}
-				viewer = identity
-			}
-
-			total := 0
 			merged := make([]session.Commit, 0, 128)
-			for _, fullRepo := range cfg.Repos {
-				owner, repo, parseErr := splitRepo(fullRepo)
-				if parseErr != nil {
-					return parseErr
+			total := 0
+			if localMode {
+				paths := localPaths
+				if len(paths) == 0 {
+					paths = []string{"."}
+				}
+				emailSet := map[string]struct{}{}
+				if meOnly {
+					for _, p := range paths {
+						for email := range localgit.CurrentEmails(p) {
+							emailSet[email] = struct{}{}
+						}
+					}
+					if len(emailSet) == 0 {
+						return fmt.Errorf("--me with --local requires git user.email in repo or global git config")
+					}
 				}
 
-				commits, fetchErr := client.ListCommits(ctx, owner, repo, since, until)
-				if fetchErr != nil {
-					return fetchErr
-				}
-				filtered := 0
-				for _, c := range commits {
-					if meOnly && !commitMatchesViewer(c, viewer) {
-						continue
+				for _, p := range paths {
+					commits, err := localgit.ListCommits(p, since, until)
+					if err != nil {
+						return err
 					}
-					normalized, ok := normalizeCommit(fullRepo, c)
-					if !ok {
-						continue
+					repoLabel := repoLabelForPath(p)
+					filtered := 0
+					for _, c := range commits {
+						if meOnly && !localCommitMatchesMe(c, emailSet) {
+							continue
+						}
+						ts := c.AuthorDate
+						if ts.IsZero() {
+							ts = c.CommitterDate
+						}
+						if ts.IsZero() {
+							continue
+						}
+						merged = append(merged, session.Commit{
+							Repo:      repoLabel,
+							SHA:       c.SHA,
+							Message:   c.Subject,
+							Timestamp: ts,
+						})
+						filtered++
 					}
-					merged = append(merged, normalized)
-					filtered++
+					total += filtered
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", repoLabel, filtered)
 				}
-				total += filtered
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, filtered)
+			} else {
+				authToken := strings.TrimSpace(token)
+				if authToken == "" {
+					authToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+				}
+				if authToken == "" {
+					authToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+				}
+
+				client := ghclient.NewClient(authToken, nil)
+				ctx := context.Background()
+
+				var viewer *ghclient.ViewerIdentity
+				if meOnly {
+					identity, identityErr := client.GetViewerIdentity(ctx)
+					if identityErr != nil {
+						return fmt.Errorf("resolve --me identity: %w", identityErr)
+					}
+					viewer = identity
+				}
+
+				for _, fullRepo := range cfg.Repos {
+					owner, repo, parseErr := splitRepo(fullRepo)
+					if parseErr != nil {
+						return parseErr
+					}
+
+					commits, fetchErr := client.ListCommits(ctx, owner, repo, since, until)
+					if fetchErr != nil {
+						return fetchErr
+					}
+					filtered := 0
+					for _, c := range commits {
+						if meOnly && !commitMatchesViewer(c, viewer) {
+							continue
+						}
+						normalized, ok := normalizeCommit(fullRepo, c)
+						if !ok {
+							continue
+						}
+						merged = append(merged, normalized)
+						filtered++
+					}
+					total += filtered
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, filtered)
+				}
 			}
 
 			sort.Slice(merged, func(i, j int) bool {
@@ -192,6 +244,8 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&meOnly, "me", false, "Filter commits to the authenticated GitHub user")
 	cmd.Flags().StringVar(&sessionGapInput, "session-gap", "", "Session split gap override (e.g. 2h, 90m)")
 	cmd.Flags().StringVar(&timezoneInput, "timezone", "", "IANA timezone for day bucketing (e.g. America/New_York)")
+	cmd.Flags().BoolVar(&localMode, "local", false, "Use local git history instead of GitHub API")
+	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan (used with --local)")
 
 	return cmd
 }
@@ -243,6 +297,28 @@ func commitMatchesViewer(c *gh.RepositoryCommit, viewer *ghclient.ViewerIdentity
 		}
 	}
 	return false
+}
+
+func localCommitMatchesMe(c localgit.Commit, emails map[string]struct{}) bool {
+	if _, ok := emails[strings.ToLower(strings.TrimSpace(c.AuthorEmail))]; ok {
+		return true
+	}
+	if _, ok := emails[strings.ToLower(strings.TrimSpace(c.CommitterEmail))]; ok {
+		return true
+	}
+	return false
+}
+
+func repoLabelForPath(path string) string {
+	clean := strings.TrimSpace(path)
+	if clean == "" {
+		return "."
+	}
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return clean
+	}
+	return filepath.Base(abs)
 }
 
 func splitRepo(repo string) (string, string, error) {

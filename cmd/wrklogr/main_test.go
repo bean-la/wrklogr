@@ -133,3 +133,12 @@ func TestCommitMatchesViewerByLoginAndEmailFallback(t *testing.T) {
 		t.Fatalf("expected non-matching commit to fail")
 	}
 }
+
+func TestRepoLabelForPath(t *testing.T) {
+	t.Parallel()
+
+	got := repoLabelForPath(".")
+	if got == "" {
+		t.Fatalf("expected non-empty repo label")
+	}
+}
