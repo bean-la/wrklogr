@@ -89,6 +89,52 @@ func TestListCommitsPaginatesAndPassesDateFilters(t *testing.T) {
 	}
 }
 
+func TestGetViewerIdentityLoadsLoginAndEmails(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			if err := json.NewEncoder(w).Encode(map[string]any{"login": "BeanDev"}); err != nil {
+				t.Fatalf("encode user response: %v", err)
+			}
+		case "/user/emails":
+			payload := []map[string]any{
+				{"email": "dev@example.com", "primary": true},
+				{"email": "alias@example.com", "primary": false},
+			}
+			if err := json.NewEncoder(w).Encode(payload); err != nil {
+				t.Fatalf("encode emails response: %v", err)
+			}
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.Client())
+	baseURL, err := url.Parse(server.URL + "/")
+	if err != nil {
+		t.Fatalf("parse test server url: %v", err)
+	}
+	client.api.BaseURL = baseURL
+
+	identity, err := client.GetViewerIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("GetViewerIdentity returned error: %v", err)
+	}
+	if identity.Login != "beandev" {
+		t.Fatalf("expected lower-cased login beandev, got %q", identity.Login)
+	}
+	if len(identity.Emails) != 2 {
+		t.Fatalf("expected 2 emails, got %d", len(identity.Emails))
+	}
+	if _, ok := identity.Emails["dev@example.com"]; !ok {
+		t.Fatalf("expected dev@example.com in identity emails")
+	}
+}
+
 func writeCommits(t *testing.T, w http.ResponseWriter, shas []string) {
 	t.Helper()
 

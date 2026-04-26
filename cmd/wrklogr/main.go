@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/bean/wrklogr/internal/config"
 	ghclient "github.com/bean/wrklogr/internal/github"
+	"github.com/bean/wrklogr/internal/session"
+	gh "github.com/google/go-github/v67/github"
 	"github.com/spf13/cobra"
 )
 
@@ -71,6 +74,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var sinceInput string
 	var untilInput string
 	var token string
+	var meOnly bool
+	var sessionGapInput string
+	var timezoneInput string
 
 	cmd := &cobra.Command{
 		Use:   "report",
@@ -97,6 +103,27 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				return fmt.Errorf("--since must be before or equal to --until")
 			}
 
+			sessionGap := cfg.SessionGap
+			if strings.TrimSpace(sessionGapInput) != "" {
+				parsed, parseErr := time.ParseDuration(strings.TrimSpace(sessionGapInput))
+				if parseErr != nil {
+					return fmt.Errorf("parse --session-gap: %w", parseErr)
+				}
+				if parsed <= 0 {
+					return fmt.Errorf("--session-gap must be > 0")
+				}
+				sessionGap = parsed
+			}
+
+			reportTZ := cfg.Timezone
+			if strings.TrimSpace(timezoneInput) != "" {
+				loadedTZ, loadErr := time.LoadLocation(strings.TrimSpace(timezoneInput))
+				if loadErr != nil {
+					return fmt.Errorf("parse --timezone: %w", loadErr)
+				}
+				reportTZ = loadedTZ
+			}
+
 			authToken := strings.TrimSpace(token)
 			if authToken == "" {
 				authToken = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
@@ -108,7 +135,17 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			client := ghclient.NewClient(authToken, nil)
 			ctx := context.Background()
 
+			var viewer *ghclient.ViewerIdentity
+			if meOnly {
+				identity, identityErr := client.GetViewerIdentity(ctx)
+				if identityErr != nil {
+					return fmt.Errorf("resolve --me identity: %w", identityErr)
+				}
+				viewer = identity
+			}
+
 			total := 0
+			merged := make([]session.Commit, 0, 128)
 			for _, fullRepo := range cfg.Repos {
 				owner, repo, parseErr := splitRepo(fullRepo)
 				if parseErr != nil {
@@ -119,11 +156,32 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				if fetchErr != nil {
 					return fetchErr
 				}
-				total += len(commits)
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, len(commits))
+				filtered := 0
+				for _, c := range commits {
+					if meOnly && !commitMatchesViewer(c, viewer) {
+						continue
+					}
+					normalized, ok := normalizeCommit(fullRepo, c)
+					if !ok {
+						continue
+					}
+					merged = append(merged, normalized)
+					filtered++
+				}
+				total += filtered
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, filtered)
 			}
 
+			sort.Slice(merged, func(i, j int) bool {
+				return merged[i].Timestamp.Before(merged[j].Timestamp)
+			})
+			sessions := session.Build(merged, sessionGap)
+			days := session.BucketByDay(sessions, reportTZ)
+
 			fmt.Fprintf(cmd.OutOrStdout(), "total: %d commits\n", total)
+			for _, day := range days {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%d sessions)\n", day.Day, day.TotalHours, len(day.Sessions))
+			}
 			return nil
 		},
 	}
@@ -131,8 +189,60 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start date/time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().StringVar(&untilInput, "until", "", "End date/time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().StringVar(&token, "token", "", "GitHub token (defaults to GITHUB_TOKEN or GH_TOKEN)")
+	cmd.Flags().BoolVar(&meOnly, "me", false, "Filter commits to the authenticated GitHub user")
+	cmd.Flags().StringVar(&sessionGapInput, "session-gap", "", "Session split gap override (e.g. 2h, 90m)")
+	cmd.Flags().StringVar(&timezoneInput, "timezone", "", "IANA timezone for day bucketing (e.g. America/New_York)")
 
 	return cmd
+}
+
+func normalizeCommit(repo string, c *gh.RepositoryCommit) (session.Commit, bool) {
+	if c == nil || c.Commit == nil {
+		return session.Commit{}, false
+	}
+
+	var timestamp time.Time
+	if c.Commit.Author != nil {
+		timestamp = c.Commit.Author.GetDate().Time
+	}
+	if timestamp.IsZero() && c.Commit.Committer != nil {
+		timestamp = c.Commit.Committer.GetDate().Time
+	}
+	if timestamp.IsZero() {
+		return session.Commit{}, false
+	}
+
+	return session.Commit{
+		Repo:      repo,
+		SHA:       c.GetSHA(),
+		Message:   c.Commit.GetMessage(),
+		Timestamp: timestamp,
+	}, true
+}
+
+func commitMatchesViewer(c *gh.RepositoryCommit, viewer *ghclient.ViewerIdentity) bool {
+	if c == nil || viewer == nil {
+		return false
+	}
+	if c.Author != nil && strings.EqualFold(c.Author.GetLogin(), viewer.Login) {
+		return true
+	}
+	if c.Committer != nil && strings.EqualFold(c.Committer.GetLogin(), viewer.Login) {
+		return true
+	}
+
+	// Fallback for commits where API user linkage is missing.
+	if c.Author == nil && c.Commit != nil && c.Commit.Author != nil {
+		if _, ok := viewer.Emails[strings.ToLower(strings.TrimSpace(c.Commit.Author.GetEmail()))]; ok {
+			return true
+		}
+	}
+	if c.Committer == nil && c.Commit != nil && c.Commit.Committer != nil {
+		if _, ok := viewer.Emails[strings.ToLower(strings.TrimSpace(c.Commit.Committer.GetEmail()))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func splitRepo(repo string) (string, string, error) {

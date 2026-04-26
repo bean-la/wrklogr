@@ -3,6 +3,9 @@ package main
 import (
 	"testing"
 	"time"
+
+	ghclient "github.com/bean/wrklogr/internal/github"
+	gh "github.com/google/go-github/v67/github"
 )
 
 func TestParseDateBound(t *testing.T) {
@@ -89,5 +92,44 @@ func TestSplitRepo(t *testing.T) {
 
 	if _, _, err := splitRepo("bean"); err == nil {
 		t.Fatalf("expected error for invalid repo format")
+	}
+}
+
+func TestCommitMatchesViewerByLoginAndEmailFallback(t *testing.T) {
+	t.Parallel()
+
+	viewer := &ghclient.ViewerIdentity{
+		Login: "beandev",
+		Emails: map[string]struct{}{
+			"dev@example.com": {},
+		},
+	}
+
+	byLogin := &gh.RepositoryCommit{
+		Author: &gh.User{Login: gh.String("BeanDev")},
+		Commit: &gh.Commit{
+			Author: &gh.CommitAuthor{Email: gh.String("other@example.com")},
+		},
+	}
+	if !commitMatchesViewer(byLogin, viewer) {
+		t.Fatalf("expected login match to pass")
+	}
+
+	byEmailFallback := &gh.RepositoryCommit{
+		Commit: &gh.Commit{
+			Author: &gh.CommitAuthor{Email: gh.String("dev@example.com")},
+		},
+	}
+	if !commitMatchesViewer(byEmailFallback, viewer) {
+		t.Fatalf("expected email fallback match to pass")
+	}
+
+	notMatch := &gh.RepositoryCommit{
+		Commit: &gh.Commit{
+			Author: &gh.CommitAuthor{Email: gh.String("nope@example.com")},
+		},
+	}
+	if commitMatchesViewer(notMatch, viewer) {
+		t.Fatalf("expected non-matching commit to fail")
 	}
 }
