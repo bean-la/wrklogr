@@ -1,0 +1,67 @@
+# release.yaml
+# Builds wrklogr binaries and creates a GitHub Release when a tag v* is pushed.
+#
+# Usage:
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# Consumers can then download the binary for their platform without needing
+# Go installed:
+#
+#   # Linux x86-64 (most CI runners)
+#   curl -sL https://github.com/bean/wrklogr/releases/latest/download/wrklogr-linux-amd64 -o /tmp/wrklogr
+#   chmod +x /tmp/wrklogr
+#
+#   # macOS arm64 (Apple Silicon)
+#   curl -sL https://github.com/bean/wrklogr/releases/latest/download/wrklogr-darwin-arm64 -o /tmp/wrklogr
+#   chmod +x /tmp/wrklogr
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+        # Skip darwin/amd64 — virtually no one runs wrklogr on Intel Macs in CI
+        exclude:
+          - goos: darwin
+            goarch: amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          BINARY="wrklogr-${{ matrix.goos }}-${{ matrix.goarch }}"
+          go build \
+            -ldflags "-X main.version=${{ github.ref_name }}" \
+            -o "/tmp/${BINARY}" \
+            ./cmd/wrklogr/
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: /tmp/wrklogr-${{ matrix.goos }}-${{ matrix.goarch }}
