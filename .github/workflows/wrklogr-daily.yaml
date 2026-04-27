@@ -3,7 +3,7 @@
 #
 # How it works:
 #   1. Downloads the latest wrklogr binary from the GitHub release
-#   2. Generates a report for yesterday via GitHub API (--me flag)
+#   2. Generates a report for yesterday via GitHub API (--author flag)
 #   3. Pushes the report as a new wiki page
 #
 # Required setup:
@@ -74,7 +74,7 @@ jobs:
             --since "${SINCE}" \
             --until "${UNTIL}" \
             --local=false \
-            --me \
+            --author "${{ github.actor }}" \
             2>&1 | tee /tmp/wrklogr-output.txt
 
           echo "${YESTERDAY}" > /tmp/wrklogr-date.txt

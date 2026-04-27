@@ -24,7 +24,7 @@ func newInstallWorkflowCmd() *cobra.Command {
 Actions generates a daily worklog report and publishes it to the wiki.
 
 The workflow runs at 23:59 UTC each day, uses the GitHub API to fetch
-yesterday's commits (--me flag), and pushes the report as a new wiki page.
+yesterday's commits (--author flag), and pushes the report as a new wiki page.
 
 Prerequisites:
   - gh CLI installed and authenticated (gh auth login)

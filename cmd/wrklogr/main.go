@@ -89,6 +89,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var untilInput string
 	var token string
 	var meOnly bool
+	var authorFilter string
 	var sessionGapInput string
 	var timezoneInput string
 	var localMode bool = true
@@ -273,6 +274,11 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 						return fmt.Errorf("resolve --me identity: %w", identityErr)
 					}
 					viewer = identity
+				} else if authorFilter != "" {
+					viewer = &ghclient.ViewerIdentity{
+						Login:  authorFilter,
+						Emails: map[string]struct{}{},
+					}
 				}
 
 				for _, fullRepo := range repos {
@@ -383,6 +389,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			if meOnly {
 				fmt.Fprintln(cmd.OutOrStdout(), "  --me")
 			}
+			if authorFilter != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --author=%s\n", authorFilter)
+			}
 			if sessionGapInput != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  --session-gap %s\n", sessionGapInput)
 			}
@@ -409,7 +418,8 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start date/time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().StringVar(&untilInput, "until", "", "End date/time (RFC3339 or YYYY-MM-DD)")
 	cmd.Flags().StringVar(&token, "token", "", "GitHub token (defaults to GITHUB_TOKEN or GH_TOKEN)")
-	cmd.Flags().BoolVar(&meOnly, "me", false, "Filter commits to the authenticated GitHub user")
+	cmd.Flags().BoolVar(&meOnly, "me", false, "Only include commits authored by the authenticated GitHub user")
+	cmd.Flags().StringVar(&authorFilter, "author", "", "Only include commits by the given GitHub login (alternative to --me for CI)")
 	cmd.Flags().StringVar(&sessionGapInput, "session-gap", "", "Session split gap override (e.g. 2h, 90m)")
 	cmd.Flags().StringVar(&timezoneInput, "timezone", "", "IANA timezone for day bucketing (e.g. America/New_York)")
 	cmd.Flags().BoolVar(&localMode, "local", true, "Use local git history instead of GitHub API")
