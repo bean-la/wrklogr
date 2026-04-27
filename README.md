@@ -11,6 +11,8 @@ A CLI tool for generating worklogs from GitHub commits. Fetches commits from con
 - **Author Filtering**: Filter commits to only show your work
 - **Multi-Repo Support**: Aggregate commits across multiple repositories
 - **Timezone Aware**: Report work sessions in your local timezone
+- **Submodule Discovery**: Automatically discover and scan git repositories in subdirectories (monorepo support)
+- **Month Summaries**: View aggregated work hours by month with grand total
 
 ## Installation
 
@@ -78,6 +80,13 @@ wrklogr report --local
 
 # Scan specific local repositories
 wrklogr report --local --local-path ~/dev/project1 --local-path ~/dev/project2
+
+# Automatically discover git repositories in subdirectories (great for monorepos)
+# Output will show which packages are included in each session
+wrklogr report --local --local-path ~/dev/monorepo --discover-submodules
+
+# Control discovery depth (default: 3)
+wrklogr report --local --local-path ~/dev/monorepo --discover-submodules --max-depth 2
 ```
 
 ### Filter by Date Range
@@ -125,8 +134,10 @@ Fetch commits and generate a worklog report.
 
 **Flags:**
 - `--config string` - Path to wrklogr TOML config file
+- `--discover-submodules` - Automatically discover git repositories in subdirectories
 - `--local` - Use local git history instead of GitHub API
 - `--local-path strings` - Local git repo path(s) to scan (with --local)
+- `--max-depth int` - Maximum depth for submodule discovery (default: 3)
 - `--me` - Filter commits to the authenticated GitHub user
 - `--session-gap string` - Override session split gap (e.g., "2h", "90m")
 - `--since string` - Start date/time (RFC3339 or YYYY-MM-DD)
@@ -200,10 +211,26 @@ bean-la/wrklogr: 15 commits
 other-org/repo-name: 23 commits
 total: 38 commits
 2025-03-01: 4h (2 sessions)
+  session 1: 2h [bean-la/wrklogr]
+  session 2: 2h [other-org/repo-name]
 2025-03-02: 6h (3 sessions)
+  session 1: 1h [bean-la/wrklogr]
+  session 2: 3h [other-org/repo-name]
+  session 3: 2h [bean-la/wrklogr, other-org/repo-name]
 2025-03-03: 2h (1 sessions)
+  session 1: 2h [other-org/repo-name]
 2025-03-04: 0h (0 sessions)
 2025-03-05: 5h (2 sessions)
+  session 1: 2h [bean-la/wrklogr]
+  session 2: 3h [other-org/repo-name]
+
+2025-03: 17h (2.1 days)
+
+grand total: 17h (2.1 days)
+
+flags used:
+  --since 2025-03-01
+  --until 2025-03-31
 ```
 
 ### Personal Commits Only
@@ -219,6 +246,33 @@ wrklogr report --local \
   --local-path ~/dev/project1 \
   --local-path ~/dev/project2 \
   --local-path ~/dev/project3
+```
+
+### Monorepo with Submodule Discovery
+
+```bash
+# Automatically discover all packages in a monorepo
+wrklogr report --local --local-path ~/dev/monorepo --discover-submodules
+
+# Limit discovery depth for better performance
+wrklogr report --local --local-path ~/dev/monorepo --discover-submodules --max-depth 2
+```
+
+Example output showing which packages are included in each session:
+```
+packages/ui: 12 commits
+packages/api: 18 commits
+packages/auth: 8 commits
+total: 38 commits
+2025-03-01: 5h (2 sessions)
+  session 1: 3h [packages/api]
+  session 2: 2h [packages/ui, packages/auth]
+2025-03-02: 4h (1 sessions)
+  session 1: 4h [packages/api, packages/auth]
+
+2025-03: 9h (1.1 days)
+
+grand total: 9h (1.1 days)
 ```
 
 ## Development

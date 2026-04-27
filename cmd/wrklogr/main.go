@@ -92,6 +92,8 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var timezoneInput string
 	var localMode bool = true
 	var localPaths []string
+	var discoverSubmodules bool
+	var maxDepth int = 3
 
 	cmd := &cobra.Command{
 		Use:   "report",
@@ -179,6 +181,34 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				paths := localPaths
 				if len(paths) == 0 {
 					paths = []string{"."}
+				}
+
+				// Discover git repositories in subdirectories if requested
+				if discoverSubmodules {
+					discovered, err := discoverGitRepositories(paths, maxDepth)
+					if err != nil {
+						return fmt.Errorf("discover git repositories: %w", err)
+					}
+					if len(discovered) > 0 {
+						// Merge discovered paths with original paths, avoiding duplicates
+						seen := make(map[string]struct{})
+						for _, p := range paths {
+							absP, err := filepath.Abs(p)
+							if err == nil {
+								seen[absP] = struct{}{}
+							}
+						}
+						for _, d := range discovered {
+							absD, err := filepath.Abs(d)
+							if err == nil {
+								if _, exists := seen[absD]; !exists {
+									paths = append(paths, d)
+									seen[absD] = struct{}{}
+								}
+							}
+						}
+						fmt.Fprintf(cmd.OutOrStdout(), "Discovered %d git repositories\n", len(discovered))
+					}
 				}
 				emailSet := map[string]struct{}{}
 				if meOnly {
@@ -274,6 +304,59 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			fmt.Fprintf(cmd.OutOrStdout(), "total: %d commits\n", total)
 			for _, day := range days {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%d sessions)\n", day.Day, day.TotalHours, len(day.Sessions))
+				for i, sess := range day.Sessions {
+					repos := getUniqueReposForSession(sess)
+					repoStr := strings.Join(repos, ", ")
+					fmt.Fprintf(cmd.OutOrStdout(), "  session %d: %dh [%s]\n", i+1, sess.FuzzyHours, repoStr)
+				}
+			}
+
+			// Print month summaries
+			months := calculateMonthSummaries(days)
+			if len(months) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout())
+				for _, m := range months {
+					days := float64(m.TotalHours) / 8.0
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%.1f days)\n", m.Month, m.TotalHours, days)
+				}
+			}
+
+			// Print grand total
+			grandTotal := 0
+			for _, day := range days {
+				grandTotal += day.TotalHours
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
+			grandTotalDays := float64(grandTotal) / 8.0
+			fmt.Fprintf(cmd.OutOrStdout(), "grand total: %dh (%.1f days)\n", grandTotal, grandTotalDays)
+
+			// Print flag summary
+			fmt.Fprintln(cmd.OutOrStdout())
+			fmt.Fprintln(cmd.OutOrStdout(), "flags used:")
+			if sinceInput != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --since %s\n", sinceInput)
+			}
+			if untilInput != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --until %s\n", untilInput)
+			}
+			if meOnly {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --me")
+			}
+			if sessionGapInput != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --session-gap %s\n", sessionGapInput)
+			}
+			if timezoneInput != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --timezone %s\n", timezoneInput)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "  --local")
+			if len(localPaths) > 0 {
+				for _, p := range localPaths {
+					fmt.Fprintf(cmd.OutOrStdout(), "  --local-path %s\n", p)
+				}
+			}
+			if discoverSubmodules {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --discover-submodules")
+				fmt.Fprintf(cmd.OutOrStdout(), "  --max-depth %d\n", maxDepth)
 			}
 			return nil
 		},
@@ -287,6 +370,8 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().StringVar(&timezoneInput, "timezone", "", "IANA timezone for day bucketing (e.g. America/New_York)")
 	cmd.Flags().BoolVar(&localMode, "local", true, "Use local git history instead of GitHub API")
 	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan (used with --local)")
+	cmd.Flags().BoolVar(&discoverSubmodules, "discover-submodules", false, "Automatically discover git repositories in subdirectories")
+	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "Maximum depth for submodule discovery (default: 3)")
 
 	return cmd
 }
@@ -340,14 +425,49 @@ func commitMatchesViewer(c *gh.RepositoryCommit, viewer *ghclient.ViewerIdentity
 	return false
 }
 
-func localCommitMatchesMe(c localgit.Commit, emails map[string]struct{}) bool {
-	if _, ok := emails[strings.ToLower(strings.TrimSpace(c.AuthorEmail))]; ok {
-		return true
+func getUniqueReposForSession(s session.Session) []string {
+	repoSet := make(map[string]struct{})
+	for _, c := range s.Commits {
+		repoSet[c.Repo] = struct{}{}
 	}
-	if _, ok := emails[strings.ToLower(strings.TrimSpace(c.CommitterEmail))]; ok {
-		return true
+	repos := make([]string, 0, len(repoSet))
+	for repo := range repoSet {
+		repos = append(repos, repo)
 	}
-	return false
+	sort.Strings(repos)
+	return repos
+}
+
+func calculateMonthSummaries(days []session.DaySummary) []struct {
+	Month      string
+	TotalHours int
+} {
+	monthMap := make(map[string]int)
+	for _, day := range days {
+		// Parse the day string (format: "2006-01-02")
+		if len(day.Day) >= 7 {
+			monthKey := day.Day[:7] // "2006-01"
+			monthMap[monthKey] += day.TotalHours
+		}
+	}
+
+	// Convert to slice and sort by month
+	months := make([]struct {
+		Month      string
+		TotalHours int
+	}, 0, len(monthMap))
+	for month, hours := range monthMap {
+		months = append(months, struct {
+			Month      string
+			TotalHours int
+		}{Month: month, TotalHours: hours})
+	}
+
+	sort.Slice(months, func(i, j int) bool {
+		return months[i].Month < months[j].Month
+	})
+
+	return months
 }
 
 func repoLabelForPath(path string) string {
@@ -360,6 +480,93 @@ func repoLabelForPath(path string) string {
 		return clean
 	}
 	return filepath.Base(abs)
+}
+
+func localCommitMatchesMe(c localgit.Commit, emails map[string]struct{}) bool {
+	if _, ok := emails[strings.ToLower(strings.TrimSpace(c.AuthorEmail))]; ok {
+		return true
+	}
+	if _, ok := emails[strings.ToLower(strings.TrimSpace(c.CommitterEmail))]; ok {
+		return true
+	}
+	return false
+}
+
+func discoverGitRepositories(rootPaths []string, maxDepth int) ([]string, error) {
+	results := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	var walkDir func(path string, depth int) error
+	walkDir = func(path string, depth int) error {
+		if depth > maxDepth {
+			return nil
+		}
+
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			// Skip directories we can't read (e.g., permission denied)
+			if os.IsPermission(err) {
+				return nil
+			}
+			return err
+		}
+
+		for _, entry := range entries {
+			// Skip hidden directories
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+
+			fullPath := filepath.Join(path, entry.Name())
+
+			if entry.IsDir() {
+				// Check if this directory is a git repository
+				gitDir := filepath.Join(fullPath, ".git")
+				if _, err := os.Stat(gitDir); err == nil {
+					absPath, err := filepath.Abs(fullPath)
+					if err != nil {
+						continue
+					}
+					if _, exists := seen[absPath]; !exists {
+						seen[absPath] = struct{}{}
+						results = append(results, fullPath)
+					}
+					// Don't recurse into git repositories we've found
+					continue
+				}
+
+				// Recurse into subdirectory
+				if err := walkDir(fullPath, depth+1); err != nil {
+					// Continue even if one subdirectory fails
+					continue
+				}
+			}
+		}
+
+		return nil
+	}
+
+	for _, rootPath := range rootPaths {
+		absRoot, err := filepath.Abs(rootPath)
+		if err != nil {
+			continue
+		}
+		// Check if root itself is a git repository and add it if not already in results
+		gitDir := filepath.Join(absRoot, ".git")
+		if _, err := os.Stat(gitDir); err == nil {
+			if _, exists := seen[absRoot]; !exists {
+				seen[absRoot] = struct{}{}
+				results = append(results, rootPath)
+			}
+		}
+		// Walk the directory
+		if err := walkDir(absRoot, 0); err != nil {
+			// Continue with other paths even if one fails
+			continue
+		}
+	}
+
+	return results, nil
 }
 
 func splitRepo(repo string) (string, string, error) {
