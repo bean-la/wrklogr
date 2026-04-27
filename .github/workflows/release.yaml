@@ -9,11 +9,11 @@
 # Go installed:
 #
 #   # Linux x86-64 (most CI runners)
-#   curl -sL https://github.com/bean/wrklogr/releases/latest/download/wrklogr-linux-amd64 -o /tmp/wrklogr
+#   curl -sL https://github.com/bean-la/wrklogr/releases/latest/download/wrklogr-linux-amd64 -o /tmp/wrklogr
 #   chmod +x /tmp/wrklogr
 #
 #   # macOS arm64 (Apple Silicon)
-#   curl -sL https://github.com/bean/wrklogr/releases/latest/download/wrklogr-darwin-arm64 -o /tmp/wrklogr
+#   curl -sL https://github.com/bean-la/wrklogr/releases/latest/download/wrklogr-darwin-arm64 -o /tmp/wrklogr
 #   chmod +x /tmp/wrklogr
 
 name: Release

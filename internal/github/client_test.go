@@ -27,7 +27,7 @@ func TestListCommitsPaginatesAndPassesDateFilters(t *testing.T) {
 	requests := make([]commitsRequest, 0, 2)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/bean/wrklogr/commits" {
+		if r.URL.Path != "/repos/bean-la/wrklogr/commits" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 
@@ -42,7 +42,7 @@ func TestListCommitsPaginatesAndPassesDateFilters(t *testing.T) {
 
 		page := q.Get("page")
 		if page == "" || page == "1" {
-			addNextLink(t, w, serverURL(server.URL), "/repos/bean/wrklogr/commits?page=2&per_page=100")
+			addNextLink(t, w, serverURL(server.URL), "/repos/bean-la/wrklogr/commits?page=2&per_page=100")
 			writeCommits(t, w, []string{"1111111"})
 			return
 		}

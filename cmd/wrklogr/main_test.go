@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	ghclient "github.com/bean/wrklogr/internal/github"
+	ghclient "github.com/bean-la/wrklogr/internal/github"
 	gh "github.com/google/go-github/v67/github"
 )
 
@@ -82,12 +82,12 @@ func TestParseDateBound(t *testing.T) {
 func TestSplitRepo(t *testing.T) {
 	t.Parallel()
 
-	owner, repo, err := splitRepo("bean/wrklogr")
+	owner, repo, err := splitRepo("bean-la/wrklogr")
 	if err != nil {
 		t.Fatalf("splitRepo() error = %v", err)
 	}
 	if owner != "bean" || repo != "wrklogr" {
-		t.Fatalf("got owner/repo %s/%s, want bean/wrklogr", owner, repo)
+		t.Fatalf("got owner/repo %s/%s, want bean-la/wrklogr", owner, repo)
 	}
 
 	if _, _, err := splitRepo("bean"); err == nil {

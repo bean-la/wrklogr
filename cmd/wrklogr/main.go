@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bean/wrklogr/internal/config"
-	ghclient "github.com/bean/wrklogr/internal/github"
-	"github.com/bean/wrklogr/internal/localgit"
-	"github.com/bean/wrklogr/internal/session"
+	"github.com/bean-la/wrklogr/internal/config"
+	ghclient "github.com/bean-la/wrklogr/internal/github"
+	"github.com/bean-la/wrklogr/internal/localgit"
+	"github.com/bean-la/wrklogr/internal/session"
 	gh "github.com/google/go-github/v67/github"
 	"github.com/spf13/cobra"
 )

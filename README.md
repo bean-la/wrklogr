@@ -25,7 +25,7 @@ A CLI tool for generating worklogs from GitHub commits. Fetches commits from con
 ### Build from Source
 
 ```bash
-git clone https://github.com/bean/wrklogr.git
+git clone https://github.com/bean-la/wrklogr.git
 cd wrklogr
 go build -o wrklogr cmd/wrklogr/main.go
 ```

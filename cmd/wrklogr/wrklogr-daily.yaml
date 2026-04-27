@@ -43,7 +43,7 @@ jobs:
       - name: Download wrklogr binary
         shell: bash
         run: |
-          BASE="https://github.com/bean/wrklogr/releases"
+          BASE="https://github.com/bean-la/wrklogr/releases"
           if [ "${{ env.WRKLOGR_VERSION }}" = "latest" ]; then
             URL="${BASE}/latest/download/wrklogr-linux-amd64"
           else

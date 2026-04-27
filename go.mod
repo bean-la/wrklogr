@@ -1,4 +1,4 @@
-module github.com/bean/wrklogr
+module github.com/bean-la/wrklogr
 
 go 1.22
 
