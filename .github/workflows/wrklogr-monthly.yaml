@@ -103,6 +103,7 @@ jobs:
           fi
 
           REPOS="${{ github.repository }}"
+          echo "repos=${REPOS}" >> "${GITHUB_OUTPUT}"
 
           AUTHORS=""
           for REPO in ${REPOS}; do
@@ -136,12 +137,17 @@ jobs:
           UNTIL="${{ steps.month.outputs.until }}"
           MONTH_LABEL="${{ steps.month.outputs.month_label }}"
           AUTHORS="${{ steps.contributors.outputs.authors }}"
+          REPOS="${{ steps.contributors.outputs.repos }}"
           REPO_URL="https://github.com/${{ github.repository }}"
           NOW_UTC=$(date -u '+%Y-%m-%d %H:%M UTC')
 
           SHOW_COMMITS_FLAG=""
           if [ "${{ inputs.show-commits }}" = "true" ]; then
             SHOW_COMMITS_FLAG="--show-commits"
+          fi
+          REPOS_FLAG=""
+          if [ -n "${REPOS}" ]; then
+            REPOS_FLAG="--repos ${REPOS}"
           fi
 
           # Build the wiki page with per-author sections
@@ -165,6 +171,7 @@ jobs:
                 --until "${UNTIL}" \
                 --local=false \
                 --author "${AUTHOR}" \
+                ${REPOS_FLAG} \
                 ${SHOW_COMMITS_FLAG} \
                 2>&1 >> /tmp/wiki-page.md || true
               printf '\n```\n\n' >> /tmp/wiki-page.md
