@@ -1,0 +1,221 @@
+# wrklogr-monthly.yaml
+# Generates a monthly worklog report and publishes it to the repository's wiki.
+# Runs daily and continuously updates the current month's wiki page so it always
+# reflects the latest data.
+#
+# How it works:
+#   1. Downloads the latest wrklogr binary from the GitHub release
+#   2. Determines the current month-to-date range
+#   3. Gathers unique contributors via the GitHub API
+#   4. Generates a per-author report section for each contributor
+#   5. Pushes the report as a wiki page named by month (e.g. worklog-2025-03.md)
+#      which gets overwritten each run
+#
+# Required setup:
+#   - The repository must have the wiki enabled (Settings > Features > Wikis)
+#   - wrklogr.toml must list the repos to scan
+#   - For cross-org repo access, create a fine-grained PAT with
+#     "Contents: Read" on those repos and save it as WORKLOG_TOKEN secret.
+#     Otherwise, the built-in GITHUB_TOKEN only has access to this repo.
+
+name: Monthly Worklog
+
+on:
+  schedule:
+    # Run at 23:59 UTC every day (end of day)
+    - cron: "59 23 * * *"
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Start date (YYYY-MM-DD)"
+        required: false
+        default: ""
+      until:
+        description: "End date (YYYY-MM-DD)"
+        required: false
+        default: ""
+      author:
+        description: "GitHub login to filter by (leave empty for all authors)"
+        required: false
+        default: ""
+      show-commits:
+        description: "Show individual commits in the report"
+        type: boolean
+        required: false
+        default: false
+
+env:
+  WRKLOGR_VERSION: latest
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to push to the wiki (separate ref)
+
+    steps:
+      - name: Download wrklogr binary
+        shell: bash
+        run: |
+          BASE="https://github.com/bean-la/wrklogr/releases"
+          if [ "${{ env.WRKLOGR_VERSION }}" = "latest" ]; then
+            URL="${BASE}/latest/download/wrklogr-linux-amd64"
+          else
+            URL="${BASE}/download/${{ env.WRKLOGR_VERSION }}/wrklogr-linux-amd64"
+          fi
+          curl -sL "$URL" -o /tmp/wrklogr
+          chmod +x /tmp/wrklogr
+          /tmp/wrklogr version
+
+      - name: Determine month range
+        id: month
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.since }}" ]; then
+            SINCE="${{ inputs.since }}"
+            UNTIL="${{ inputs.until }}"
+          else
+            # Current month-to-date
+            SINCE=$(date -u '+%Y-%m-01')
+            UNTIL=$(date -u '+%Y-%m-%d')
+          fi
+
+          echo "since=${SINCE}" >> "${GITHUB_OUTPUT}"
+          echo "until=${UNTIL}" >> "${GITHUB_OUTPUT}"
+
+          # e.g. "2025-03" – used for the page name and heading
+          MONTH_LABEL=$(date -u -d "${SINCE}" '+%Y-%m')
+          echo "month_label=${MONTH_LABEL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Gather contributors
+        id: contributors
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          SINCE="${{ steps.month.outputs.since }}"
+          UNTIL="${{ steps.month.outputs.until }}"
+
+          # If an author was explicitly given via dispatch, use only that one
+          if [ -n "${{ inputs.author }}" ]; then
+            echo "authors=${{ inputs.author }}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          REPOS="${{ github.repository }}"
+
+          AUTHORS=""
+          for REPO in ${REPOS}; do
+            PAGE=1
+            while true; do
+              DATA=$(gh api \
+                "/repos/${REPO}/commits?since=${SINCE}T00:00:00Z&until=${UNTIL}T23:59:59Z&per_page=100&page=${PAGE}" \
+                --jq '.[].author.login // empty' 2>/dev/null)
+              if [ -z "${DATA}" ]; then
+                break
+              fi
+              for LOGIN in ${DATA}; do
+                if ! echo "${AUTHORS}" | grep -qw "${LOGIN}"; then
+                  AUTHORS="${AUTHORS} ${LOGIN}"
+                fi
+              done
+              PAGE=$((PAGE + 1))
+            done
+          done
+
+          AUTHORS=$(echo "${AUTHORS}" | xargs)
+          echo "authors=${AUTHORS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate report
+        id: report
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          SINCE="${{ steps.month.outputs.since }}"
+          UNTIL="${{ steps.month.outputs.until }}"
+          MONTH_LABEL="${{ steps.month.outputs.month_label }}"
+          AUTHORS="${{ steps.contributors.outputs.authors }}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          NOW_UTC=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          SHOW_COMMITS_FLAG=""
+          if [ "${{ inputs.show-commits }}" = "true" ]; then
+            SHOW_COMMITS_FLAG="--show-commits"
+          fi
+
+          # Build the wiki page with per-author sections
+          {
+            printf '# Monthly Worklog Report\n\n'
+            printf '## %s\n\n' "${MONTH_LABEL}"
+            printf 'Period: %s to %s\n\n' "${SINCE}" "${UNTIL}"
+            printf -- '---\n\n'
+          } > /tmp/wiki-page.md
+
+          if [ -z "${AUTHORS}" ]; then
+            printf '_No contributors found in this period._\n' >> /tmp/wiki-page.md
+          else
+            for AUTHOR in ${AUTHORS}; do
+              {
+                printf '## %s\n\n' "${AUTHOR}"
+                printf '```\n'
+              } >> /tmp/wiki-page.md
+              /tmp/wrklogr report \
+                --since "${SINCE}" \
+                --until "${UNTIL}" \
+                --local=false \
+                --author "${AUTHOR}" \
+                ${SHOW_COMMITS_FLAG} \
+                2>&1 >> /tmp/wiki-page.md || true
+              printf '\n```\n\n' >> /tmp/wiki-page.md
+            done
+          fi
+
+          printf -- '---\n' >> /tmp/wiki-page.md
+          printf '_Generated by [wrklogr](%s) on %s_\n' "${REPO_URL}" "${NOW_UTC}" >> /tmp/wiki-page.md
+
+          echo "${MONTH_LABEL}" > /tmp/wrklogr-month.txt
+          echo "${SINCE}" > /tmp/wrklogr-since.txt
+          echo "${UNTIL}" > /tmp/wrklogr-until.txt
+
+      - name: Push to wiki
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          MONTH_LABEL=$(cat /tmp/wrklogr-month.txt)
+          PAGE="worklog-${MONTH_LABEL}"
+          OWNER="${{ github.repository_owner }}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+
+          # Shallow clone the wiki repo using the token
+          git clone \
+            "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/${REPO}.wiki.git" \
+            /tmp/wiki \
+            --depth 1
+
+          cd /tmp/wiki
+
+          git config user.name  "wrklogr-bot"
+          git config user.email "wrklogr-bot@users.noreply.github.com"
+
+          # Write the page (overwrites the existing one for this month)
+          cp /tmp/wiki-page.md "${PAGE}.md"
+          git add "${PAGE}.md"
+
+          # Maintain an index page
+          if [ ! -f "Worklogs.md" ]; then
+            printf '# Monthly Worklogs\n\nMonthly reports generated by [wrklogr](https://github.com/%s/%s).\n\n' \
+              "${OWNER}" "${REPO}" > Worklogs.md
+          fi
+
+          # Insert/replace the link for this month
+          if grep -q "^\- \[${MONTH_LABEL}\]" Worklogs.md 2>/dev/null; then
+            sed -i "s|^\- \[${MONTH_LABEL}\].*|- [${MONTH_LABEL}](./${PAGE})|" Worklogs.md
+          else
+            sed -i '0,/^$/ s|^$|- ['"${MONTH_LABEL}"'](./'"${PAGE}"')\n|' Worklogs.md
+          fi
+          git add Worklogs.md
+
+          git commit -m "Update worklog report for ${MONTH_LABEL}"
+          git push

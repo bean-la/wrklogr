@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-//go:embed wrklogr-daily.yaml
+//go:embed wrklogr-monthly.yaml
 var defaultWorkflowYAML []byte
 
 func newInstallWorkflowCmd() *cobra.Command {
@@ -19,22 +19,24 @@ func newInstallWorkflowCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "install-workflow",
-		Short: "Install the daily worklog GitHub Actions workflow into a repo",
-		Long: `Create or update .github/workflows/wrklogr-daily.yaml so that GitHub
-Actions generates a daily worklog report and publishes it to the wiki.
+		Short: "Install the monthly worklog GitHub Actions workflow into a repo",
+		Long: `Create or update .github/workflows/wrklogr-monthly.yaml so that GitHub
+		Actions generates a monthly worklog report and publishes it to the wiki.
 
-The workflow runs at 23:59 UTC each day, uses the GitHub API to fetch
-yesterday's commits (--author flag), and pushes the report as a new wiki page.
+		The workflow runs daily at 23:59 UTC and continuously updates the current
+		month's wiki page with the latest data. It collects all contributors in the
+		month-to-date range, sections the report per author, and pushes the result
+		as a single monthly wiki page (e.g. worklog-2025-03.md).
 
-Prerequisites:
-  - gh CLI installed and authenticated (gh auth login)
-  - The repository must have the wiki enabled (Settings > Features > Wikis)
-  - wrklogr.toml must list the repos to scan
-  - For cross-org repos, create a fine-grained PAT with "Contents: Read"
-    on those repos and save it as the WORKLOG_TOKEN secret.
+		Prerequisites:
+		  - gh CLI installed and authenticated (gh auth login)
+		  - The repository must have the wiki enabled (Settings > Features > Wikis)
+		  - wrklogr.toml must list the repos to scan
+		  - For cross-org repos, create a fine-grained PAT with "Contents: Read"
+		    on those repos and save it as the WORKLOG_TOKEN secret.
 
-After installation, commit and push the workflow file, then test with:
-  gh workflow run wrklogr-daily.yaml`,
+		After installation, commit and push the workflow file, then test with:
+		  gh workflow run wrklogr-monthly.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return installWorkflow(cmd, workflowPath)
 		},
@@ -73,7 +75,7 @@ func installWorkflow(cmd *cobra.Command, repoRoot string) error {
 		return fmt.Errorf("create %s: %w", workflowDir, err)
 	}
 
-	workflowFile := filepath.Join(workflowDir, "wrklogr-daily.yaml")
+	workflowFile := filepath.Join(workflowDir, "wrklogr-monthly.yaml")
 
 	// Check if already exists
 	exists := false
@@ -115,17 +117,17 @@ func installWorkflow(cmd *cobra.Command, repoRoot string) error {
 		fmt.Fprintln(cmd.OutOrStdout())
 		fmt.Fprintf(cmd.OutOrStdout(), "  4. Commit and push the workflow:\n")
 		fmt.Fprintln(cmd.OutOrStdout())
-		fmt.Fprintf(cmd.OutOrStdout(), "       git add .github/workflows/wrklogr-daily.yaml\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "       git commit -m \"ci: add daily worklog workflow\"\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "       git add .github/workflows/wrklogr-monthly.yaml\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "       git commit -m \"ci: add monthly worklog workflow\"\n")
 		fmt.Fprintf(cmd.OutOrStdout(), "       git push\n")
 		fmt.Fprintln(cmd.OutOrStdout())
 		fmt.Fprintf(cmd.OutOrStdout(), "  5. Test it manually:\n")
 		fmt.Fprintln(cmd.OutOrStdout())
-		fmt.Fprintf(cmd.OutOrStdout(), "       gh workflow run wrklogr-daily.yaml -R %s\n", ownerRepo)
+		fmt.Fprintf(cmd.OutOrStdout(), "       gh workflow run wrklogr-monthly.yaml -R %s\n", ownerRepo)
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "  1. Commit and push the workflow file, then test:\n")
 		fmt.Fprintln(cmd.OutOrStdout())
-		fmt.Fprintf(cmd.OutOrStdout(), "       gh workflow run wrklogr-daily.yaml\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "       gh workflow run wrklogr-monthly.yaml\n")
 	}
 
 	return nil
