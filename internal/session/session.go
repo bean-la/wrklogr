@@ -99,6 +99,9 @@ func makeSession(commits []Commit) Session {
 	start := commits[0].Timestamp
 	end := commits[len(commits)-1].Timestamp
 	hours := int(math.Ceil(end.Sub(start).Hours()))
+	if hours == 0 {
+		hours = 1
+	}
 	return Session{
 		Commits:    commits,
 		Start:      start,

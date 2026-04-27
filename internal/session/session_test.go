@@ -26,8 +26,8 @@ func TestBuildClustersAcrossReposWithGapAndCeil(t *testing.T) {
 	if got := len(sessions[0].Commits); got != 2 {
 		t.Fatalf("expected first session to include 2 commits, got %d", got)
 	}
-	if got := sessions[1].FuzzyHours; got != 0 {
-		t.Fatalf("expected single-commit session to ceil to 0 hours, got %d", got)
+	if got := sessions[1].FuzzyHours; got != 1 {
+		t.Fatalf("expected single-commit session to round to 1 hour, got %d", got)
 	}
 }
 
