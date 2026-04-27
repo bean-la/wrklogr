@@ -32,6 +32,7 @@ on:
 
 env:
   WRKLOGR_VERSION: latest
+  WRKLOGR_REPOS: "bean-la/wrklogr"
 
 jobs:
   generate:
@@ -70,11 +71,16 @@ jobs:
             UNTIL="${{ inputs.until }}"
           fi
 
+          REPOS_FLAG=""
+          if [ -n "${{ env.WRKLOGR_REPOS }}" ]; then
+            REPOS_FLAG="--repos ${{ env.WRKLOGR_REPOS }}"
+          fi
           /tmp/wrklogr report \
             --since "${SINCE}" \
             --until "${UNTIL}" \
             --local=false \
             --me \
+            ${REPOS_FLAG} \
             2>&1 | tee /tmp/wrklogr-output.txt
 
           echo "${YESTERDAY}" > /tmp/wrklogr-date.txt
