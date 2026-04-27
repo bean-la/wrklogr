@@ -96,6 +96,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var discoverSubmodules bool
 	var maxDepth int = 3
 	var showCommits bool
+	var reposInput []string
 
 	cmd := &cobra.Command{
 		Use:   "report",
@@ -254,8 +255,12 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", repoLabel, filtered)
 				}
 			} else {
-				if len(cfg.Repos) == 0 {
-					return fmt.Errorf("no repositories configured; set repos in wrklogr.toml")
+				repos := cfg.Repos
+				if len(reposInput) > 0 {
+					repos = reposInput
+				}
+				if len(repos) == 0 {
+					return fmt.Errorf("no repositories configured; set repos in wrklogr.toml or use --repos")
 				}
 
 				client := ghclient.NewClient(authToken, nil)
@@ -270,13 +275,13 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					viewer = identity
 				}
 
-				for _, fullRepo := range cfg.Repos {
-					owner, repo, parseErr := splitRepo(fullRepo)
+				for _, fullRepo := range repos {
+					owner, repoName, parseErr := splitRepo(fullRepo)
 					if parseErr != nil {
 						return parseErr
 					}
 
-					commits, fetchErr := client.ListCommits(ctx, owner, repo, since, until)
+					commits, fetchErr := client.ListCommits(ctx, owner, repoName, since, until)
 					if fetchErr != nil {
 						return fetchErr
 					}
@@ -293,7 +298,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 						filtered++
 					}
 					total += filtered
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, filtered)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, len(commits))
 				}
 			}
 
@@ -412,6 +417,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&discoverSubmodules, "discover-submodules", false, "Automatically discover git repositories in subdirectories")
 	cmd.Flags().BoolVar(&showCommits, "show-commits", false, "Show individual commits within each session")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "Maximum depth for submodule discovery (default: 3)")
+	cmd.Flags().StringSliceVar(&reposInput, "repos", nil, "Repositories to scan (owner/repo format, overrides config file)")
 
 	return cmd
 }
