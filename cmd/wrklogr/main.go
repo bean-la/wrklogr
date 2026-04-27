@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -38,6 +39,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Build a worklog from GitHub commits across private repos",
 		Long: `wrklogr fetches commits from configured GitHub repositories, clusters them
 into work sessions, and emits Markdown (and optionally JSON) reports.`,
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Name() == "version" {
 				return nil
@@ -52,13 +54,22 @@ into work sessions, and emits Markdown (and optionally JSON) reports.`,
 	}
 
 	root.PersistentFlags().StringVar(&configPath, "config", "", "Path to wrklogr TOML config")
-	root.AddCommand(newVersionCmd())
-	root.AddCommand(newReportCmd(func() (*config.RuntimeConfig, error) {
+
+	reportCmd := newReportCmd(func() (*config.RuntimeConfig, error) {
 		if cfg == nil {
 			return nil, fmt.Errorf("config is not loaded")
 		}
 		return cfg, nil
-	}))
+	})
+
+	root.AddCommand(newVersionCmd())
+	root.AddCommand(reportCmd)
+
+	// Default to running report when no subcommand is provided
+	root.RunE = func(cmd *cobra.Command, args []string) error {
+		return reportCmd.RunE(reportCmd, args)
+	}
+
 	return root
 }
 
@@ -79,7 +90,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var meOnly bool
 	var sessionGapInput string
 	var timezoneInput string
-	var localMode bool
+	var localMode bool = true
 	var localPaths []string
 
 	cmd := &cobra.Command{
@@ -88,10 +99,24 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := getConfig()
 			if err != nil {
-				return err
+				// If config file doesn't exist, that's OK for local mode
+				if !os.IsNotExist(err) {
+					return err
+				}
+				cfg = &config.RuntimeConfig{
+					SessionGap: 2 * time.Hour,
+					Timezone:   time.UTC,
+				}
 			}
-			if len(cfg.Repos) == 0 {
-				return fmt.Errorf("no repositories configured; set repos in wrklogr.toml")
+
+			// Auto-set since to beginning of current month if not specified and today is after the 20th
+			if sinceInput == "" {
+				now := time.Now()
+				if now.Day() > 20 {
+					// Set to the first day of the current month at midnight
+					beginningOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+					sinceInput = beginningOfMonth.Format("2006-01-02")
+				}
 			}
 
 			since, err := parseDateBound(sinceInput, false)
@@ -134,6 +159,12 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			}
 			if authToken == "" {
 				authToken = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+			}
+			if authToken == "" {
+				// Try to get token from gh CLI
+				if cmd, err := exec.Command("gh", "auth", "token").Output(); err == nil {
+					authToken = strings.TrimSpace(string(cmd))
+				}
 			}
 			if !localMode && authToken == "" {
 				localMode = true
@@ -191,6 +222,10 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", repoLabel, filtered)
 				}
 			} else {
+				if len(cfg.Repos) == 0 {
+					return fmt.Errorf("no repositories configured; set repos in wrklogr.toml")
+				}
+
 				client := ghclient.NewClient(authToken, nil)
 				ctx := context.Background()
 
@@ -250,7 +285,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&meOnly, "me", false, "Filter commits to the authenticated GitHub user")
 	cmd.Flags().StringVar(&sessionGapInput, "session-gap", "", "Session split gap override (e.g. 2h, 90m)")
 	cmd.Flags().StringVar(&timezoneInput, "timezone", "", "IANA timezone for day bucketing (e.g. America/New_York)")
-	cmd.Flags().BoolVar(&localMode, "local", false, "Use local git history instead of GitHub API")
+	cmd.Flags().BoolVar(&localMode, "local", true, "Use local git history instead of GitHub API")
 	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan (used with --local)")
 
 	return cmd
