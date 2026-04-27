@@ -296,7 +296,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					}
 					filtered := 0
 					for _, c := range commits {
-						if meOnly && !commitMatchesViewer(c, viewer) {
+						if viewer != nil && !commitMatchesViewer(c, viewer) {
 							continue
 						}
 						normalized, ok := normalizeCommit(fullRepo, c)
@@ -307,7 +307,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 						filtered++
 					}
 					total += filtered
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, len(commits))
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, filtered)
 				}
 			}
 
