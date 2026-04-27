@@ -5,7 +5,7 @@ set -e
 # This script builds the wrklogr binary and installs it to a directory in your PATH.
 
 echo "🔨 Building wrklogr..."
-go build -o wrklogr cmd/wrklogr/main.go
+go build -o wrklogr ./cmd/wrklogr/
 
 # Determine installation directory
 INSTALL_DIR=""
