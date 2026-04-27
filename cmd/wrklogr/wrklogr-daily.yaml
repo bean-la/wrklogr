@@ -32,7 +32,7 @@ on:
 
 env:
   WRKLOGR_VERSION: latest
-  WRKLOGR_REPOS: "bean-la/wrklogr"
+  WRKLOGR_REPOS: ${{ github.repository }}
 
 jobs:
   generate:
