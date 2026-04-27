@@ -13,6 +13,8 @@ A CLI tool for generating worklogs from GitHub commits. Fetches commits from con
 - **Timezone Aware**: Report work sessions in your local timezone
 - **Submodule Discovery**: Automatically discover and scan git repositories in subdirectories (monorepo support)
 - **Month Summaries**: View aggregated work hours by month with grand total
+- **Commit Details**: Show individual commits (SHA + message) within each session with `--show-commits`
+- **Flag Summary**: Shows all flags used to generate the report for reproducibility
 
 ## Installation
 
@@ -144,6 +146,7 @@ Fetch commits and generate a worklog report.
 - `--timezone string` - IANA timezone for day bucketing
 - `--token string` - GitHub token (defaults to GITHUB_TOKEN or GH_TOKEN)
 - `--until string` - End date/time (RFC3339 or YYYY-MM-DD)
+- `--show-commits` - Show individual commits (SHA + message) within each session
 
 ### `wrklogr version`
 
@@ -258,6 +261,42 @@ wrklogr report --local --local-path ~/dev/monorepo --discover-submodules
 wrklogr report --local --local-path ~/dev/monorepo --discover-submodules --max-depth 2
 ```
 
+### Show Commits Per Session
+
+```bash
+# Show individual commits within each work session
+wrklogr report --show-commits
+```
+
+Example output:
+```
+bean-la/wrklogr: 15 commits
+other-org/repo-name: 23 commits
+total: 38 commits
+2025-03-01: 4h (2 sessions)
+  session 1: 2h [bean-la/wrklogr]
+    commit 1: abc12345 Fix login redirect
+    commit 2: def67890 Update README formatting
+    commit 3: ghi90123 Add unit tests for auth
+  session 2: 2h [other-org/repo-name]
+    commit 4: jkl23456 Refactor API endpoints
+    commit 5: mno78901 Add rate limiting middleware
+2025-03-02: 3h (1 sessions)
+  session 1: 3h [bean-la/wrklogr, other-org/repo-name]
+    commit 1: pqr34567 Bump dependencies
+    commit 2: stu89012 Fix CORS issue
+    commit 3: vwx12345 Update deployment config
+```
+
+Duplicate commits (same message, different SHA — e.g. from amends or rebases) are collapsed into a single line with a count:
+```
+2025-03-05: 1h (1 sessions)
+  session 1: 1h [rainbow-mono]
+    commit 1: bde605e9 hot patch fix for response id in nameConvId (x2)
+    commit 2: dc37e4c2 Enhance conversation ID validation in userHelpers (x2)
+```
+
+
 Example output showing which packages are included in each session:
 ```
 packages/ui: 12 commits
@@ -273,6 +312,11 @@ total: 38 commits
 2025-03: 9h (1.1 days)
 
 grand total: 9h (1.1 days)
+
+flags used:
+  --local
+  --local-path ~/dev/monorepo
+  --discover-submodules
 ```
 
 ## Development

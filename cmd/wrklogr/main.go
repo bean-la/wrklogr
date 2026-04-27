@@ -94,6 +94,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var localPaths []string
 	var discoverSubmodules bool
 	var maxDepth int = 3
+	var showCommits bool
 
 	cmd := &cobra.Command{
 		Use:   "report",
@@ -308,6 +309,40 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					repos := getUniqueReposForSession(sess)
 					repoStr := strings.Join(repos, ", ")
 					fmt.Fprintf(cmd.OutOrStdout(), "  session %d: %dh [%s]\n", i+1, sess.FuzzyHours, repoStr)
+					if showCommits {
+						commitIdx := 0
+						for j := 0; j < len(sess.Commits); {
+							c := sess.Commits[j]
+							// Truncate message to first line and limit length
+							msg := strings.SplitN(c.Message, "\n", 2)[0]
+							if len(msg) > 60 {
+								msg = msg[:60] + "..."
+							}
+
+							// Count consecutive duplicates (same message, different SHA)
+							dupCount := 1
+							for k := j + 1; k < len(sess.Commits); k++ {
+								nextMsg := strings.SplitN(sess.Commits[k].Message, "\n", 2)[0]
+								if len(nextMsg) > 60 {
+									nextMsg = nextMsg[:60] + "..."
+								}
+								if nextMsg == msg {
+									dupCount++
+								} else {
+									break
+								}
+							}
+
+							commitIdx++
+							if dupCount > 1 {
+								fmt.Fprintf(cmd.OutOrStdout(), "    commit %d: %s %s (x%d)\n", commitIdx, c.SHA[:8], msg, dupCount)
+								j += dupCount
+							} else {
+								fmt.Fprintf(cmd.OutOrStdout(), "    commit %d: %s %s\n", commitIdx, c.SHA[:8], msg)
+								j++
+							}
+						}
+					}
 				}
 			}
 
@@ -358,6 +393,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				fmt.Fprintln(cmd.OutOrStdout(), "  --discover-submodules")
 				fmt.Fprintf(cmd.OutOrStdout(), "  --max-depth %d\n", maxDepth)
 			}
+			if showCommits {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --show-commits")
+			}
 			return nil
 		},
 	}
@@ -371,6 +409,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&localMode, "local", true, "Use local git history instead of GitHub API")
 	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan (used with --local)")
 	cmd.Flags().BoolVar(&discoverSubmodules, "discover-submodules", false, "Automatically discover git repositories in subdirectories")
+	cmd.Flags().BoolVar(&showCommits, "show-commits", false, "Show individual commits within each session")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "Maximum depth for submodule discovery (default: 3)")
 
 	return cmd
