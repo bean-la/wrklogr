@@ -2,14 +2,14 @@
 # Generates a daily worklog report and publishes it to the repository's wiki.
 #
 # How it works:
-#   1. Builds wrklogr from source
+#   1. Downloads the latest wrklogr binary from the GitHub release
 #   2. Generates a report for yesterday via GitHub API (--me flag)
 #   3. Pushes the report as a new wiki page
 #
 # Required setup:
 #   - The repository must have the wiki enabled (Settings > Features > Wikis)
 #   - wrklogr.toml must list the repos to scan
-#   - If scanning repos across the org, create a fine-grained PAT with
+#   - For cross-org repo access, create a fine-grained PAT with
 #     "Contents: Read" on those repos and save it as WORKLOG_TOKEN secret.
 #     Otherwise, the built-in GITHUB_TOKEN only has access to this repo.
 
@@ -31,7 +31,7 @@ on:
         default: ""
 
 env:
-  GO_VERSION: "1.22"
+  WRKLOGR_VERSION: latest
 
 jobs:
   generate:
@@ -40,27 +40,24 @@ jobs:
       contents: write # needed to push to the wiki (separate ref)
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          path: wrklogr
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: wrklogr/go.sum
-
-      - name: Build wrklogr
-        working-directory: wrklogr
-        run: go build -o /tmp/wrklogr cmd/wrklogr/main.go
+      - name: Download wrklogr binary
+        shell: bash
+        run: |
+          BASE="https://github.com/bean/wrklogr/releases"
+          if [ "${{ env.WRKLOGR_VERSION }}" = "latest" ]; then
+            URL="${BASE}/latest/download/wrklogr-linux-amd64"
+          else
+            URL="${BASE}/download/${{ env.WRKLOGR_VERSION }}/wrklogr-linux-amd64"
+          fi
+          curl -sL "$URL" -o /tmp/wrklogr
+          chmod +x /tmp/wrklogr
+          /tmp/wrklogr version
 
       - name: Generate report
         id: report
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
-        working-directory: wrklogr
         run: |
           YESTERDAY=$(date -u -d 'yesterday' '+%Y-%m-%d')
           echo "report_date=${YESTERDAY}" >> "${GITHUB_OUTPUT}"
