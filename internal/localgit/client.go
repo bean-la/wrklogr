@@ -14,6 +14,7 @@ type Commit struct {
 	SHA            string
 	AuthorDate     time.Time
 	CommitterDate  time.Time
+	AuthorName     string
 	AuthorEmail    string
 	CommitterEmail string
 	Subject        string
@@ -23,7 +24,7 @@ func ListCommits(repoPath string, since *time.Time, until *time.Time) ([]Commit,
 	args := []string{
 		"-C", repoPath,
 		"log",
-		"--pretty=format:%H%x1f%aI%x1f%cI%x1f%ae%x1f%ce%x1f%s",
+		"--pretty=format:%H%x1f%aI%x1f%cI%x1f%an%x1f%ae%x1f%ce%x1f%s",
 	}
 	if since != nil {
 		args = append(args, "--since="+since.Format(time.RFC3339))
@@ -50,7 +51,7 @@ func ListCommits(repoPath string, since *time.Time, until *time.Time) ([]Commit,
 	out := make([]Commit, 0, len(lines))
 	for _, line := range lines {
 		parts := strings.Split(line, fieldSep)
-		if len(parts) < 6 {
+		if len(parts) < 7 {
 			continue
 		}
 		authorDate, err := time.Parse(time.RFC3339, parts[1])
@@ -65,9 +66,10 @@ func ListCommits(repoPath string, since *time.Time, until *time.Time) ([]Commit,
 			SHA:            strings.TrimSpace(parts[0]),
 			AuthorDate:     authorDate,
 			CommitterDate:  committerDate,
-			AuthorEmail:    strings.ToLower(strings.TrimSpace(parts[3])),
-			CommitterEmail: strings.ToLower(strings.TrimSpace(parts[4])),
-			Subject:        strings.TrimSpace(parts[5]),
+			AuthorName:     strings.TrimSpace(parts[3]),
+			AuthorEmail:    strings.ToLower(strings.TrimSpace(parts[4])),
+			CommitterEmail: strings.ToLower(strings.TrimSpace(parts[5])),
+			Subject:        strings.TrimSpace(parts[6]),
 		})
 	}
 	return out, nil

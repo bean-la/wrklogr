@@ -237,6 +237,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 						if meOnly && !localCommitMatchesMe(c, emailSet) {
 							continue
 						}
+						if authorFilter != "" && !strings.EqualFold(c.AuthorName, authorFilter) {
+							continue
+						}
 						ts := c.AuthorDate
 						if ts.IsZero() {
 							ts = c.CommitterDate
