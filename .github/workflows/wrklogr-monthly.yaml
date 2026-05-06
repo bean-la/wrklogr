@@ -64,17 +64,16 @@ jobs:
       contents: write # needed to push to the wiki (separate ref)
 
     steps:
-      - name: Download wrklogr binary
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build wrklogr binary
         shell: bash
         run: |
-          BASE="https://github.com/bean-la/wrklogr/releases"
-          if [ "${{ env.WRKLOGR_VERSION }}" = "latest" ]; then
-            URL="${BASE}/latest/download/wrklogr-linux-amd64"
-          else
-            URL="${BASE}/download/${{ env.WRKLOGR_VERSION }}/wrklogr-linux-amd64"
-          fi
-          curl -sL "$URL" -o /tmp/wrklogr
-          chmod +x /tmp/wrklogr
+          git clone https://github.com/bean-la/wrklogr.git /tmp/wrklogr-src
+          cd /tmp/wrklogr-src
+          go build -o /tmp/wrklogr ./cmd/wrklogr/
           /tmp/wrklogr version
 
       - name: Determine month range
