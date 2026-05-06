@@ -311,6 +311,9 @@ jobs:
           git config user.name  "wrklogr-bot"
           git config user.email "wrklogr-bot@users.noreply.github.com"
 
+          # Remove old per-month pages
+          git rm -f worklog-*.md 2>/dev/null || true
+
           # Copy each author page
           for AUTHOR in ${AUTHORS}; do
             if [ -f "/tmp/wiki-pages/${AUTHOR}.md" ]; then
