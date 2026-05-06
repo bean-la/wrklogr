@@ -111,7 +111,7 @@ jobs:
             exit 0
           fi
 
-          REPOS="${{ github.repository }}"
+          REPOS="${{ vars.WRKLOGR_REPOS }}"
           echo "repos=${REPOS}" >> "${GITHUB_OUTPUT}"
 
           AUTHORS=""
@@ -139,14 +139,16 @@ jobs:
       - name: Create wrklogr config
         shell: bash
         run: |
-          cat > /tmp/wrklogr.toml << EOF
+          cat > /tmp/wrklogr.toml << CONFIG
           session_gap = "2h"
           timezone = "UTC"
-          repos = ["${{ github.repository }}"]
+          repos = [
+          $(for R in ${{ vars.WRKLOGR_REPOS }}; do echo "  \"$R\","; done)
+          ]
 
           [gcal]
           calendar = "${{ vars.GCAL_CALENDAR }}"
-          EOF
+          CONFIG
 
       - name: Generate report
         id: report
@@ -168,7 +170,8 @@ jobs:
           fi
           REPOS_FLAG=""
           if [ -n "${REPOS}" ]; then
-            REPOS_FLAG="--repos ${REPOS}"
+            REPOS_CSV=$(echo "${REPOS}" | tr ' ' ',')
+            REPOS_FLAG="--repos ${REPOS_CSV}"
           fi
           GCAL_FLAG=""
           if [ "${{ inputs.gcal }}" = "true" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ]; then
