@@ -12,6 +12,7 @@ import (
 
 	"github.com/bean-la/wrklogr/internal/config"
 	ghclient "github.com/bean-la/wrklogr/internal/github"
+	gcal "github.com/bean-la/wrklogr/internal/gcal"
 	"github.com/bean-la/wrklogr/internal/localgit"
 	noko "github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
@@ -101,6 +102,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var pushNoko bool
 	var nokoDryRun bool
 	var nokoTokenInput string
+	var gcalFlag bool
 	var reposInput []string
 
 	cmd := &cobra.Command{
@@ -321,6 +323,79 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			sessions := session.Build(merged, sessionGap)
 			days := session.BucketByDay(sessions, reportTZ)
 
+			if gcalFlag {
+				gcalCmd := ""
+				gcalCal := "seb@bean.la"
+				if cfg.GCal != nil {
+					if cfg.GCal.Command != "" {
+						gcalCmd = cfg.GCal.Command
+					}
+					if cfg.GCal.Calendar != "" {
+						gcalCal = cfg.GCal.Calendar
+					}
+				}
+				if gcalCal == "" {
+					return fmt.Errorf("--gcal requires a calendar email; set gcal.calendar in wrklogr.toml")
+				}
+
+				gcalSince := time.Now().AddDate(0, -1, 0)
+				gcalUntil := time.Now()
+				if since != nil {
+					gcalSince = *since
+				}
+				if until != nil {
+					gcalUntil = *until
+				}
+
+				events, err := gcal.FetchEvents(gcalCmd, gcalCal, gcalSince, gcalUntil)
+				if err != nil {
+					return fmt.Errorf("fetch calendar events: %w", err)
+				}
+				if len(events) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "calendar: %d events\n", len(events))
+				}
+
+				dayMap := make(map[string]*session.DaySummary)
+				for i := range days {
+					dayMap[days[i].Day] = &days[i]
+				}
+
+				for _, ev := range events {
+					dayKey := ev.Start.Format("2006-01-02")
+					minutes := int(ev.Length.Minutes())
+					if minutes < 1 {
+						minutes = 1
+					}
+					fuzzyHours := (minutes + 59) / 60
+
+					sess := session.Session{
+						Commits: []session.Commit{
+							{
+								Repo:      "📅",
+								SHA:       "",
+								Message:   ev.Title,
+								Timestamp: ev.Start,
+							},
+						},
+						Start:      ev.Start,
+						End:        ev.End,
+						FuzzyHours: fuzzyHours,
+					}
+
+					if ds, ok := dayMap[dayKey]; ok {
+						ds.Sessions = append(ds.Sessions, sess)
+						ds.TotalHours += fuzzyHours
+					} else {
+						days = append(days, session.DaySummary{
+							Day:        dayKey,
+							Sessions:   []session.Session{sess},
+							TotalHours: fuzzyHours,
+						})
+						dayMap[dayKey] = &days[len(days)-1]
+					}
+				}
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "total: %d commits\n", total)
 			for _, day := range days {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%d sessions)\n", day.Day, day.TotalHours, len(day.Sessions))
@@ -487,6 +562,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			if nokoTokenInput != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  --noko-token %s\n", nokoTokenInput)
 			}
+			if gcalFlag {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --gcal")
+			}
 			return nil
 		},
 	}
@@ -505,6 +583,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&pushNoko, "push-noko", false, "Push session summaries to Noko")
 	cmd.Flags().BoolVar(&nokoDryRun, "noko-dry-run", false, "Print what would be pushed to Noko without actually posting")
 	cmd.Flags().StringVar(&nokoTokenInput, "noko-token", "", "Noko API token (defaults to NOKO_TOKEN env var or noko.api_token in config)")
+	cmd.Flags().BoolVar(&gcalFlag, "gcal", false, "Include calendar events from gcalcli as work sessions")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "Maximum depth for submodule discovery (default: 3)")
 	cmd.Flags().StringSliceVar(&reposInput, "repos", nil, "Repositories to scan (owner/repo format, overrides config file)")
 

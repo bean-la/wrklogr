@@ -18,6 +18,12 @@ type Config struct {
 	SessionGap string      `toml:"session_gap"`
 	Timezone   string      `toml:"timezone"`
 	Noko       *NokoConfig `toml:"noko"`
+	GCal       *GCalConfig `toml:"gcal"`
+}
+
+type GCalConfig struct {
+	Command  string `toml:"command"`
+	Calendar string `toml:"calendar"`
 }
 
 type NokoConfig struct {
@@ -49,6 +55,7 @@ type RuntimeConfig struct {
 	SessionGap time.Duration
 	Timezone   *time.Location
 	Noko       *NokoConfig
+	GCal       *GCalConfig
 	Path       string
 }
 
@@ -131,6 +138,7 @@ func buildRuntimeConfig(cfg Config, path string) (*RuntimeConfig, error) {
 		SessionGap: sessionGap,
 		Timezone:   location,
 		Noko:       cfg.Noko,
+		GCal:       cfg.GCal,
 		Path:       path,
 	}, nil
 }
