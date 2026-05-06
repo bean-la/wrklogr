@@ -118,6 +118,21 @@ jobs:
           $(for R in ${{ vars.WRKLOGR_REPOS }}; do echo "  \"$R\","; done)
           ]
 
+          [noko]
+
+          [noko.projects]
+          "bean-la/shtack" = { project_id = 687237 }
+          "bean-la/wrklogr" = { project_id = 687237 }
+          "bean-la/harness-web" = { project_id = 687237 }
+          "bean-la/slyce-studio" = { project_id = 687237 }
+          "bean-la/slyce-install" = { project_id = 687237 }
+          "bean-la/desert-radio-next" = { project_id = 687237 }
+          "bean-la/tmv-vote" = { project_id = 716638 }
+          "Third-Eye-Tarot/rainbow-mono" = { project_id = 708823 }
+          "Third-Eye-Tarot/deck" = { project_id = 708823 }
+          "Third-Eye-Tarot/marketing-web" = { project_id = 708823 }
+          "futurerootsinc/dublab-wp" = { project_id = 586501 }
+
           [gcal]
           calendar = "${{ vars.GCAL_CALENDAR }}"
           CONFIG
