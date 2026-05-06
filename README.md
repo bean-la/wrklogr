@@ -1,6 +1,6 @@
 # wrklogr
 
-A CLI tool for generating worklogs from GitHub commits. Fetches commits from configured repositories, clusters them into work sessions, and outputs summary reports.
+A CLI tool for generating worklogs from GitHub commits. Fetches commits from configured repositories, clusters them into work sessions, and outputs summary reports. Can push sessions to Noko time tracking and include Google Calendar events.
 
 ## Features
 
@@ -15,6 +15,9 @@ A CLI tool for generating worklogs from GitHub commits. Fetches commits from con
 - **Month Summaries**: View aggregated work hours by month with grand total
 - **Commit Details**: Show individual commits (SHA + message) within each session with `--show-commits`
 - **Flag Summary**: Shows all flags used to generate the report for reproducibility
+- **Noko Integration**: Push session summaries to Noko time tracking with per-repo project mapping
+- **Google Calendar Integration**: Include public calendar events (phone calls, meetings) as work sessions via iCal feed
+- **Interactive Review**: Guided wizard to review, assign calendar events to projects, dry-run, and push to Noko
 
 ## Installation
 
@@ -63,6 +66,19 @@ session_gap = "2h"
 
 # IANA timezone for day bucketing in reports
 timezone = "America/New_York"
+
+# Noko time tracking integration
+[noko]
+# api_token = "your-noko-token"  # or set NOKO_TOKEN env var
+
+# Per-repo Noko project mapping
+[noko.projects]
+"bean-la/slyce-studio" = { project_id = 687237 }
+"Third-Eye-Tarot/rainbow-mono" = { project_id = 708823 }
+
+# Google Calendar integration (reads public iCal feed)
+[gcal]
+calendar = "seb@bean.la"
 ```
 
 ## Usage
@@ -91,7 +107,29 @@ wrklogr report --local --local-path ~/dev/monorepo --discover-submodules
 wrklogr report --local --local-path ~/dev/monorepo --discover-submodules --max-depth 2
 ```
 
-### Filter by Date Range
+### Report with Google Calendar Events
+
+```bash
+# Include calendar events (phone calls, meetings) from your public iCal feed
+wrklogr report --gcal
+```
+
+### Push to Noko
+
+```bash
+# Dry run (shows what would be pushed)
+wrklogr report --noko-dry-run --gcal
+
+# Push session summaries to Noko
+wrklogr report --push-noko --gcal
+```
+
+### Interactive Review
+
+```bash
+# Review a month, assign unassigned calendar events, dry-run, and push
+wrklogr review --month 2026-04
+```
 
 ```bash
 # Since a specific date
@@ -147,6 +185,27 @@ Fetch commits and generate a worklog report.
 - `--token string` - GitHub token (defaults to GITHUB_TOKEN or GH_TOKEN)
 - `--until string` - End date/time (RFC3339 or YYYY-MM-DD)
 - `--show-commits` - Show individual commits (SHA + message) within each session
+- `--push-noko` - Push session summaries to Noko time tracking
+- `--noko-dry-run` - Show what would be pushed to Noko without posting
+- `--noko-token string` - Noko API token (defaults to NOKO_TOKEN env var)
+- `--gcal` - Include Google Calendar events as work sessions
+
+### `wrklogr review`
+
+Interactive workflow to review a month, assign calendar events to Noko projects, dry-run, and push.
+
+```bash
+# Review current month
+wrklogr review
+
+# Review a specific month
+wrklogr review --month 2026-04
+```
+
+**Flags:**
+- `--month string` - Month to review (YYYY-MM format)
+- `--session-gap string` - Override session split gap
+- `--timezone string` - IANA timezone for day bucketing
 
 ### `wrklogr version`
 
@@ -199,6 +258,22 @@ wrklogr report --token your_token_here
 ### Local Git Mode
 
 No authentication required. Works with any local git repository.
+
+### Noko Time Tracking
+
+Set your Noko personal access token:
+
+```bash
+export NOKO_TOKEN=your_noko_token_here
+```
+
+Or add it to `wrklogr.toml`:
+```toml
+[noko]
+api_token = "your-noko-token"
+```
+
+Tokens can be generated from your Noko account settings at https://nokotime.com.
 
 ## Examples
 
