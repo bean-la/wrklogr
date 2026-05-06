@@ -64,15 +64,16 @@ jobs:
       contents: write # needed to push to the wiki (separate ref)
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: '**/go.sum'
 
       - name: Build wrklogr binary
         shell: bash
         run: |
-          git clone https://github.com/bean-la/wrklogr.git /tmp/wrklogr-src
-          cd /tmp/wrklogr-src
           go build -o /tmp/wrklogr ./cmd/wrklogr/
           /tmp/wrklogr version
 
