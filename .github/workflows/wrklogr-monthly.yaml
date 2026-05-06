@@ -100,42 +100,15 @@ jobs:
       - name: Gather contributors
         id: contributors
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          SINCE="${{ steps.month.outputs.since }}"
-          UNTIL="${{ steps.month.outputs.until }}"
-
-          # If an author was explicitly given via dispatch, use only that one
+          # Explicit author override via workflow dispatch
           if [ -n "${{ inputs.author }}" ]; then
             echo "authors=${{ inputs.author }}" >> "${GITHUB_OUTPUT}"
-            exit 0
+          else
+            echo "authors=sebbean nphillips" >> "${GITHUB_OUTPUT}"
           fi
 
-          REPOS="${{ vars.WRKLOGR_REPOS }}"
-          echo "repos=${REPOS}" >> "${GITHUB_OUTPUT}"
-
-          AUTHORS=""
-          for REPO in ${REPOS}; do
-            PAGE=1
-            while true; do
-              DATA=$(gh api \
-                "/repos/${REPO}/commits?since=${SINCE}T00:00:00Z&until=${UNTIL}T23:59:59Z&per_page=100&page=${PAGE}" \
-                --jq '.[].author.login // empty' 2>/dev/null || true)
-              if [ -z "${DATA}" ]; then
-                break
-              fi
-              for LOGIN in ${DATA}; do
-                if ! echo "${AUTHORS}" | grep -qw "${LOGIN}"; then
-                  AUTHORS="${AUTHORS} ${LOGIN}"
-                fi
-              done
-              PAGE=$((PAGE + 1))
-            done
-          done
-
-          AUTHORS=$(echo "${AUTHORS}" | xargs)
-          echo "authors=${AUTHORS}" >> "${GITHUB_OUTPUT}"
+          echo "repos=${{ vars.WRKLOGR_REPOS }}" >> "${GITHUB_OUTPUT}"
 
       - name: Create wrklogr config
         shell: bash
