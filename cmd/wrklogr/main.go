@@ -943,6 +943,9 @@ func sessionSummary(sess session.Session, repos []string, llmClient *llm.Client)
 
 	if llmClient != nil {
 		summary, err := llmClient.Summarize(msgs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "LLM summarize: %v, falling back to commit splicing\n", err)
+		}
 		if err == nil && summary != "" {
 			return summary
 		}
