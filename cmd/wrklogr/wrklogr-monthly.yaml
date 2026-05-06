@@ -214,11 +214,9 @@ jobs:
                 done <<< "$NOKIO_OUTPUT"
 
                 if [ ${#PROJECT_HOURS[@]} -gt 0 ]; then
-                  PROJECT_TABLE="## Summary by Project
-
-| Project | Hours |
-|---------|-------|
-"
+                  printf '## Summary by Project\n\n' > /tmp/project-table.txt
+                  printf '| Project | Hours |\n' >> /tmp/project-table.txt
+                  printf '|---------|-------|\n' >> /tmp/project-table.txt
                   for PROJ_ID in "${!PROJECT_HOURS[@]}"; do
                     NAME="Project $PROJ_ID"
                     case "$PROJ_ID" in
@@ -237,11 +235,10 @@ jobs:
                       639789) NAME="Syng" ;;
                       590606) NAME="Tartine" ;;
                     esac
-                    PROJECT_TABLE+="| $NAME | ${PROJECT_HOURS[$PROJ_ID]}h |
-"
+                    printf '| %s | %sh |\n' "$NAME" "${PROJECT_HOURS[$PROJ_ID]}" >> /tmp/project-table.txt
                   done
-                  PROJECT_TABLE+="
-"
+                  printf '\n' >> /tmp/project-table.txt
+                  PROJECT_TABLE=$(cat /tmp/project-table.txt)
                 fi
               fi
 
