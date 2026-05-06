@@ -341,8 +341,14 @@ jobs:
           git config user.name  "wrklogr-bot"
           git config user.email "wrklogr-bot@users.noreply.github.com"
 
-          # Remove old per-month pages
+          # Remove old per-month and stale top-level author pages
           git rm -f worklog-*.md 2>/dev/null || true
+          for F in *.md; do
+            case "$F" in
+              Home.md|Worklogs.md) ;;
+              *) git rm -f "$F" 2>/dev/null || true ;;
+            esac
+          done
 
           # Create month directory and copy author pages
           mkdir -p "${MONTH_LABEL}"
