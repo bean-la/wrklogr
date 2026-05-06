@@ -156,17 +156,10 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 						End:        ev.End,
 						FuzzyHours: fuzzyHours,
 					}
-					if ds, ok := dayMap[dayKey]; ok {
-						ds.Sessions = append(ds.Sessions, sess)
-						ds.TotalHours += fuzzyHours
-					} else {
-						days = append(days, session.DaySummary{
-							Day:        dayKey,
-							Sessions:   []session.Session{sess},
-							TotalHours: fuzzyHours,
-						})
-						dayMap[dayKey] = &days[len(days)-1]
-					}
+				if ds, ok := dayMap[dayKey]; ok {
+					ds.Sessions = append(ds.Sessions, sess)
+					ds.TotalHours += fuzzyHours
+				}
 				}
 			}
 
