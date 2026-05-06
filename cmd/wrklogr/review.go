@@ -15,6 +15,7 @@ import (
 	ghclient "github.com/bean-la/wrklogr/internal/github"
 	noko "github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -412,5 +413,34 @@ func readLine() string {
 }
 
 func saveUpdatedConfig(path string, nc *config.NokoConfig) error {
+	if path == "" {
+		return fmt.Errorf("config path unknown")
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	var cfg config.Config
+	if err := toml.Unmarshal(raw, &cfg); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	if cfg.Noko == nil {
+		cfg.Noko = nc
+	} else {
+		cfg.Noko.RepoProjects = nc.RepoProjects
+	}
+
+	data, err := toml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
 	return nil
 }

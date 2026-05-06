@@ -1,15 +1,13 @@
 # wrklogr-monthly.yaml
-# Generates a monthly worklog report and publishes it to the repository's wiki.
-# Runs daily and continuously updates the current month's wiki page so it always
-# reflects the latest data.
+# Generates a full-month worklog report and publishes it to the repository's wiki.
+# Runs on the 1st of each month and reports on the complete previous month.
 #
 # How it works:
 #   1. Downloads the latest wrklogr binary from the GitHub release
-#   2. Determines the current month-to-date range
+#   2. Determines the full previous month range
 #   3. Gathers unique contributors via the GitHub API
 #   4. Generates a per-author report section for each contributor
 #   5. Pushes the report as a wiki page named by month (e.g. worklog-2025-03.md)
-#      which gets overwritten each run
 #
 # Required setup:
 #   - The repository must have the wiki enabled (Settings > Features > Wikis)
@@ -22,8 +20,8 @@ name: Monthly Worklog
 
 on:
   schedule:
-    # Run at 23:59 UTC every day (end of day)
-    - cron: "59 23 * * *"
+    # Run at 02:00 UTC on the 1st of every month
+    - cron: "0 2 1 * *"
   workflow_dispatch:
     inputs:
       since:
@@ -75,15 +73,15 @@ jobs:
             SINCE="${{ inputs.since }}"
             UNTIL="${{ inputs.until }}"
           else
-            # Current month-to-date
-            SINCE=$(date -u '+%Y-%m-01')
-            UNTIL=$(date -u '+%Y-%m-%d')
+            # Full previous month
+            SINCE=$(date -u -d "$(date -u '+%Y-%m-01') - 1 month" '+%Y-%m-01')
+            UNTIL=$(date -u -d "${SINCE} + 1 month - 1 second" '+%Y-%m-%d %H:%M:%S')
           fi
 
           echo "since=${SINCE}" >> "${GITHUB_OUTPUT}"
           echo "until=${UNTIL}" >> "${GITHUB_OUTPUT}"
 
-          # e.g. "2025-03" – used for the page name and heading
+          # e.g. "2026-03" – month label from the start date
           MONTH_LABEL=$(date -u -d "${SINCE}" '+%Y-%m')
           echo "month_label=${MONTH_LABEL}" >> "${GITHUB_OUTPUT}"
 

@@ -43,7 +43,7 @@ func newRootCmd() *cobra.Command {
 into work sessions, and emits Markdown (and optionally JSON) reports.`,
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if cmd.Name() == "version" {
+			if cmd.Name() == "version" || cmd.Name() == "onboard" {
 				return nil
 			}
 			loaded, err := config.Load(configPath)
@@ -67,6 +67,7 @@ into work sessions, and emits Markdown (and optionally JSON) reports.`,
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(reportCmd)
 	root.AddCommand(newInstallWorkflowCmd())
+	root.AddCommand(newOnboardCmd())
 	root.AddCommand(newReviewCmd(func() (*config.RuntimeConfig, error) {
 		if cfg == nil {
 			return nil, fmt.Errorf("config is not loaded")
