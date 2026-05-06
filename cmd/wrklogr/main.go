@@ -466,7 +466,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
 				}
 				if nokoToken == "" && !nokoDryRun {
-					return fmt.Errorf("--push-noko requires a Noko API token; set --noko-token, NOKOTOKEN, or noko.api_token in config")
+					return fmt.Errorf("--push-noko requires a Noko API token; set --noko-token, NOKO_TOKEN, or noko.api_token in config")
 				}
 
 				var nokoClient *noko.Client

@@ -41,9 +41,20 @@ on:
         type: boolean
         required: false
         default: false
+      push-noko:
+        description: "Push sessions to Noko"
+        type: boolean
+        required: false
+        default: false
+      gcal:
+        description: "Include Google Calendar events"
+        type: boolean
+        required: false
+        default: true
 
 env:
   WRKLOGR_VERSION: latest
+  NOKO_TOKEN: ${{ secrets.NOKO_TOKEN }}
 
 jobs:
   generate:
@@ -125,6 +136,18 @@ jobs:
           AUTHORS=$(echo "${AUTHORS}" | xargs)
           echo "authors=${AUTHORS}" >> "${GITHUB_OUTPUT}"
 
+      - name: Create wrklogr config
+        shell: bash
+        run: |
+          cat > /tmp/wrklogr.toml << EOF
+          session_gap = "2h"
+          timezone = "UTC"
+          repos = ["${{ github.repository }}"]
+
+          [gcal]
+          calendar = "${{ vars.GCAL_CALENDAR }}"
+          EOF
+
       - name: Generate report
         id: report
         shell: bash
@@ -147,6 +170,10 @@ jobs:
           if [ -n "${REPOS}" ]; then
             REPOS_FLAG="--repos ${REPOS}"
           fi
+          GCAL_FLAG=""
+          if [ "${{ inputs.gcal }}" = "true" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ]; then
+            GCAL_FLAG="--gcal"
+          fi
 
           # Build the wiki page with per-author sections
           {
@@ -165,12 +192,14 @@ jobs:
                 printf '```\n'
               } >> /tmp/wiki-page.md
               /tmp/wrklogr report \
+                --config /tmp/wrklogr.toml \
                 --since "${SINCE}" \
                 --until "${UNTIL}" \
                 --local=false \
                 --author "${AUTHOR}" \
                 ${REPOS_FLAG} \
                 ${SHOW_COMMITS_FLAG} \
+                ${GCAL_FLAG} \
                 2>&1 >> /tmp/wiki-page.md || true
               printf '\n```\n\n' >> /tmp/wiki-page.md
             done
@@ -182,6 +211,21 @@ jobs:
           echo "${MONTH_LABEL}" > /tmp/wrklogr-month.txt
           echo "${SINCE}" > /tmp/wrklogr-since.txt
           echo "${UNTIL}" > /tmp/wrklogr-until.txt
+
+      - name: Push sessions to Noko
+        if: inputs.push-noko == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          /tmp/wrklogr report \
+            --config /tmp/wrklogr.toml \
+            --since "${{ steps.month.outputs.since }}" \
+            --until "${{ steps.month.outputs.until }}" \
+            --local=false \
+            --push-noko \
+            ${GCAL_FLAG} \
+            ${REPOS_FLAG}
 
       - name: Push to wiki
         shell: bash

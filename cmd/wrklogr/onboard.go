@@ -94,7 +94,7 @@ func runOnboard(cmd *cobra.Command) error {
 	if nokoToken != "" {
 		fmt.Fprintln(out, "  → token set")
 	} else {
-		fmt.Fprintln(out, "  → skipped (set NOKOTOKEN env var later)")
+		fmt.Fprintln(out, "  → skipped (set NOKO_TOKEN env var later)")
 	}
 
 	fmt.Fprintln(out)
