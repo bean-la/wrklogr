@@ -481,6 +481,13 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 							minutesPerGroup = 1
 						}
 						for projID, projRepos := range groups {
+							if projID == 0 {
+								if nokoDryRun {
+									desc := strings.Join(projRepos, ", ")
+									fmt.Fprintf(cmd.OutOrStdout(), "  %s  %dm  project=%d  %s  (skipped — no project mapping)\n", day.Day, minutesPerGroup, projID, desc)
+								}
+								continue
+							}
 							desc := strings.Join(projRepos, ", ")
 							if len(sess.Commits) > 0 {
 								desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
