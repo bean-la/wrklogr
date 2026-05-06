@@ -67,6 +67,12 @@ into work sessions, and emits Markdown (and optionally JSON) reports.`,
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(reportCmd)
 	root.AddCommand(newInstallWorkflowCmd())
+	root.AddCommand(newReviewCmd(func() (*config.RuntimeConfig, error) {
+		if cfg == nil {
+			return nil, fmt.Errorf("config is not loaded")
+		}
+		return cfg, nil
+	}))
 
 	// Default to running report when no subcommand is provided
 	root.RunE = func(cmd *cobra.Command, args []string) error {
