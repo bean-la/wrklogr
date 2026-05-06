@@ -83,18 +83,16 @@ jobs:
         run: |
           if [ -n "${{ inputs.since }}" ]; then
             SINCE="${{ inputs.since }}"
-            UNTIL="${{ inputs.until }}"
+            UNTIL=$(echo "${{ inputs.until }}" | sed 's/T.*//')
           else
-            # Full previous month
             SINCE=$(date -u -d "$(date -u '+%Y-%m-01') - 1 month" '+%Y-%m-01')
-            UNTIL=$(date -u -d "${SINCE} + 1 month - 1 second" '+%Y-%m-%d %H:%M:%S')
+            UNTIL=$(date -u -d "${SINCE} + 1 month - 1 second" '+%Y-%m-%d')
           fi
 
           echo "since=${SINCE}" >> "${GITHUB_OUTPUT}"
           echo "until=${UNTIL}" >> "${GITHUB_OUTPUT}"
 
-          # e.g. "2026-03" – month label from the start date
-          MONTH_LABEL=$(date -u -d "${SINCE}" '+%Y-%m')
+          MONTH_LABEL=$(date -u -d "${SINCE}" '+%m-%Y')
           echo "month_label=${MONTH_LABEL}" >> "${GITHUB_OUTPUT}"
 
       - name: Gather contributors
