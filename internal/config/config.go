@@ -19,17 +19,25 @@ type Config struct {
 	Timezone   string      `toml:"timezone"`
 	Noko       *NokoConfig `toml:"noko"`
 	GCal       *GCalConfig `toml:"gcal"`
+	LLM        *LLMConfig  `toml:"llm"`
 }
 
 type GCalConfig struct {
 	Calendar string `toml:"calendar"`
 }
 
+type LLMConfig struct {
+	APIKey  string `toml:"api_key"`
+	Model   string `toml:"model"`
+	BaseURL string `toml:"base_url"`
+}
+
 type NokoConfig struct {
-	APIToken     string                  `toml:"api_token"`
-	ProjectID    int                     `toml:"project_id"`
-	ProjectName  string                  `toml:"project_name"`
-	RepoProjects map[string]RepoProject  `toml:"projects"`
+	APIToken      string                  `toml:"api_token"`
+	ProjectID     int                     `toml:"project_id"`
+	ProjectName   string                  `toml:"project_name"`
+	RepoProjects  map[string]RepoProject  `toml:"projects"`
+	MinLogMinutes int                     `toml:"min_log_minutes"`
 }
 
 type RepoProject struct {
@@ -55,6 +63,7 @@ type RuntimeConfig struct {
 	Timezone   *time.Location
 	Noko       *NokoConfig
 	GCal       *GCalConfig
+	LLM        *LLMConfig
 	Path       string
 }
 
@@ -138,6 +147,7 @@ func buildRuntimeConfig(cfg Config, path string) (*RuntimeConfig, error) {
 		Timezone:   location,
 		Noko:       cfg.Noko,
 		GCal:       cfg.GCal,
+		LLM:        cfg.LLM,
 		Path:       path,
 	}, nil
 }

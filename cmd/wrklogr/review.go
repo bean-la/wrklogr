@@ -13,6 +13,7 @@ import (
 	"github.com/bean-la/wrklogr/internal/config"
 	gcal "github.com/bean-la/wrklogr/internal/gcal"
 	ghclient "github.com/bean-la/wrklogr/internal/github"
+	"github.com/bean-la/wrklogr/internal/llm"
 	noko "github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
 	"github.com/pelletier/go-toml/v2"
@@ -212,6 +213,12 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 			fmt.Fprintln(cmd.OutOrStdout())
 			fmt.Fprintln(cmd.OutOrStdout(), "─── Noko dry run ──────────────────────────────────────────")
 
+			var llmClient *llm.Client
+			llmCfg := resolveLLMConfig(cfg, "", "")
+			if llmCfg.APIKey != "" {
+				llmClient = llm.NewClient(llmCfg)
+			}
+
 			nokoToken := strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
 			if nokoToken == "" && cfg.Noko != nil {
 				nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
@@ -230,6 +237,13 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 					if minutesPerGroup < 1 {
 						minutesPerGroup = 1
 					}
+					effectiveMin := 0
+					if cfg.Noko != nil && cfg.Noko.MinLogMinutes > 0 {
+						effectiveMin = cfg.Noko.MinLogMinutes
+					}
+					if effectiveMin > 0 && minutesPerGroup < effectiveMin {
+						minutesPerGroup = effectiveMin
+					}
 					for projID, projRepos := range groups {
 						if projID == 0 {
 							desc := strings.Join(projRepos, ", ")
@@ -240,7 +254,7 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 						if len(sess.Commits) > 0 {
 							desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
 						}
-						summary := summarizeSession(sess, projRepos)
+						summary := sessionSummary(sess, projRepos, llmClient)
 						if summary != "" {
 							desc += ": " + summary
 						}
@@ -273,6 +287,13 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 					if minutesPerGroup < 1 {
 						minutesPerGroup = 1
 					}
+					effectiveMin := 0
+					if cfg.Noko != nil && cfg.Noko.MinLogMinutes > 0 {
+						effectiveMin = cfg.Noko.MinLogMinutes
+					}
+					if effectiveMin > 0 && minutesPerGroup < effectiveMin {
+						minutesPerGroup = effectiveMin
+					}
 					for projID, projRepos := range groups {
 						if projID == 0 {
 							continue
@@ -281,7 +302,7 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 						if len(sess.Commits) > 0 {
 							desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
 						}
-						summary := summarizeSession(sess, projRepos)
+						summary := sessionSummary(sess, projRepos, llmClient)
 						if summary != "" {
 							desc += ": " + summary
 						}

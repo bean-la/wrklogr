@@ -13,6 +13,7 @@ import (
 	"github.com/bean-la/wrklogr/internal/config"
 	ghclient "github.com/bean-la/wrklogr/internal/github"
 	gcal "github.com/bean-la/wrklogr/internal/gcal"
+	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/localgit"
 	noko "github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
@@ -109,6 +110,10 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var pushNoko bool
 	var nokoDryRun bool
 	var nokoTokenInput string
+	var minLogMinutes int
+	var llmSummarize bool
+	var llmAPIKey string
+	var llmModel string
 	var gcalFlag bool
 	var reposInput []string
 
@@ -471,6 +476,15 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					fmt.Fprintln(cmd.OutOrStdout())
 					fmt.Fprintln(cmd.OutOrStdout(), "─── Noko dry run ──────────────────────────────────────────")
 				}
+
+				var llmClient *llm.Client
+				if llmSummarize {
+					llmCfg := resolveLLMConfig(cfg, llmAPIKey, llmModel)
+					if llmCfg.APIKey != "" {
+						llmClient = llm.NewClient(llmCfg)
+					}
+				}
+
 				pushed := 0
 				for _, day := range days {
 					for _, sess := range day.Sessions {
@@ -479,6 +493,13 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 						minutesPerGroup := sess.FuzzyHours * 60 / len(groups)
 						if minutesPerGroup < 1 {
 							minutesPerGroup = 1
+						}
+						effectiveMin := minLogMinutes
+						if effectiveMin == 0 && cfg.Noko != nil && cfg.Noko.MinLogMinutes > 0 {
+							effectiveMin = cfg.Noko.MinLogMinutes
+						}
+						if effectiveMin > 0 && minutesPerGroup < effectiveMin {
+							minutesPerGroup = effectiveMin
 						}
 						for projID, projRepos := range groups {
 							if projID == 0 {
@@ -493,7 +514,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 								desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
 							}
 
-							summary := summarizeSession(sess, projRepos)
+							summary := sessionSummary(sess, projRepos, llmClient)
 							if summary != "" {
 								desc += ": " + summary
 							}
@@ -565,6 +586,12 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			if nokoTokenInput != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  --noko-token %s\n", nokoTokenInput)
 			}
+			if minLogMinutes > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --min-log-minutes %d\n", minLogMinutes)
+			}
+			if llmSummarize {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --llm-summarize")
+			}
 			if gcalFlag {
 				fmt.Fprintln(cmd.OutOrStdout(), "  --gcal")
 			}
@@ -586,6 +613,10 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&pushNoko, "push-noko", false, "Push session summaries to Noko")
 	cmd.Flags().BoolVar(&nokoDryRun, "noko-dry-run", false, "Print what would be pushed to Noko without actually posting")
 	cmd.Flags().StringVar(&nokoTokenInput, "noko-token", "", "Noko API token (defaults to NOKO_TOKEN env var or noko.api_token in config)")
+	cmd.Flags().IntVar(&minLogMinutes, "min-log-minutes", 0, "Round per-project session minutes up to this minimum (default 0 = no rounding)")
+	cmd.Flags().BoolVar(&llmSummarize, "llm-summarize", false, "Use LLM to summarize sessions instead of commit message splicing")
+	cmd.Flags().StringVar(&llmAPIKey, "llm-api-key", "", "OpenAI API key (defaults to LLM_API_KEY env var or llm.api_key in config)")
+	cmd.Flags().StringVar(&llmModel, "llm-model", "", "LLM model (defaults to config or gpt-4o-mini)")
 	cmd.Flags().BoolVar(&gcalFlag, "gcal", false, "Include calendar events from gcalcli as work sessions")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "Maximum depth for submodule discovery (default: 3)")
 	cmd.Flags().StringSliceVar(&reposInput, "repos", nil, "Repositories to scan (owner/repo format, overrides config file)")
@@ -857,4 +888,76 @@ func parseDateBound(input string, endOfDay bool) (*time.Time, error) {
 		day = day.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
 	}
 	return &day, nil
+}
+
+func resolveLLMConfig(cfg *config.RuntimeConfig, flagKey string, flagModel string) llm.Config {
+	llmCfg := llm.Config{}
+
+	if flagKey != "" {
+		llmCfg.APIKey = flagKey
+	} else if k := strings.TrimSpace(os.Getenv("LLM_API_KEY")); k != "" {
+		llmCfg.APIKey = k
+	} else if cfg.LLM != nil {
+		llmCfg.APIKey = cfg.LLM.APIKey
+	}
+
+	if flagModel != "" {
+		llmCfg.Model = flagModel
+	} else if cfg.LLM != nil && cfg.LLM.Model != "" {
+		llmCfg.Model = cfg.LLM.Model
+	}
+
+	if cfg.LLM != nil && cfg.LLM.BaseURL != "" {
+		llmCfg.BaseURL = cfg.LLM.BaseURL
+	}
+
+	return llmCfg
+}
+
+func sessionSummary(sess session.Session, repos []string, llmClient *llm.Client) string {
+	repoSet := make(map[string]struct{}, len(repos))
+	for _, r := range repos {
+		repoSet[r] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	msgs := make([]string, 0, 20)
+	for _, c := range sess.Commits {
+		if _, ok := repoSet[c.Repo]; !ok {
+			continue
+		}
+		msg := strings.SplitN(c.Message, "\n", 2)[0]
+		msg = strings.TrimSpace(msg)
+		if msg == "" {
+			continue
+		}
+		if _, ok := seen[msg]; ok {
+			continue
+		}
+		seen[msg] = struct{}{}
+		msgs = append(msgs, msg)
+		if len(msgs) >= 20 {
+			break
+		}
+	}
+
+	if llmClient != nil {
+		summary, err := llmClient.Summarize(msgs)
+		if err == nil && summary != "" {
+			return summary
+		}
+	}
+
+	if len(msgs) == 0 {
+		return ""
+	}
+	if len(msgs) > 3 {
+		msgs = msgs[:3]
+	}
+	for i, m := range msgs {
+		if len(m) > 55 {
+			msgs[i] = m[:55] + "..."
+		}
+	}
+	return strings.Join(msgs, "; ")
 }
