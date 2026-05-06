@@ -234,8 +234,6 @@ jobs:
                 fi
               done <<< "$NOKO_PART"
 
-              rm -rf /tmp/noko-logs
-
               # Build project summary table
               if [ ${#PROJ_HOURS[@]} -gt 0 ]; then
                 SUM_FILE=$(mktemp)
@@ -296,6 +294,7 @@ jobs:
               } > "$PAGE_FILE"
 
               [ -n "$SUM_FILE" ] && rm -f "$SUM_FILE"
+              rm -rf /tmp/noko-logs
             done
           fi
 
