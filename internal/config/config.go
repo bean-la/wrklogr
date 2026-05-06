@@ -21,8 +21,27 @@ type Config struct {
 }
 
 type NokoConfig struct {
+	APIToken     string                  `toml:"api_token"`
+	ProjectID    int                     `toml:"project_id"`
+	ProjectName  string                  `toml:"project_name"`
+	RepoProjects map[string]RepoProject  `toml:"projects"`
+}
+
+type RepoProject struct {
 	ProjectID   int    `toml:"project_id"`
 	ProjectName string `toml:"project_name"`
+}
+
+func (n *NokoConfig) ProjectForRepo(repo string) (int, string) {
+	if n != nil && n.RepoProjects != nil {
+		if rp, ok := n.RepoProjects[repo]; ok {
+			return rp.ProjectID, rp.ProjectName
+		}
+	}
+	if n != nil {
+		return n.ProjectID, n.ProjectName
+	}
+	return 0, ""
 }
 
 type RuntimeConfig struct {

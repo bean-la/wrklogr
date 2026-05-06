@@ -13,6 +13,7 @@ import (
 	"github.com/bean-la/wrklogr/internal/config"
 	ghclient "github.com/bean-la/wrklogr/internal/github"
 	"github.com/bean-la/wrklogr/internal/localgit"
+	noko "github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
 	gh "github.com/google/go-github/v67/github"
 	"github.com/spf13/cobra"
@@ -97,6 +98,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var discoverSubmodules bool
 	var maxDepth int = 3
 	var showCommits bool
+	var pushNoko bool
+	var nokoDryRun bool
+	var nokoTokenInput string
 	var reposInput []string
 
 	cmd := &cobra.Command{
@@ -380,6 +384,66 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			grandTotalDays := float64(grandTotal) / 8.0
 			fmt.Fprintf(cmd.OutOrStdout(), "grand total: %dh (%.1f days)\n", grandTotal, grandTotalDays)
 
+			if pushNoko || nokoDryRun {
+				nokoToken := strings.TrimSpace(nokoTokenInput)
+				if nokoToken == "" {
+					nokoToken = strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
+				}
+				if nokoToken == "" && cfg.Noko != nil {
+					nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
+				}
+				if nokoToken == "" && !nokoDryRun {
+					return fmt.Errorf("--push-noko requires a Noko API token; set --noko-token, NOKOTOKEN, or noko.api_token in config")
+				}
+
+				var nokoClient *noko.Client
+				if !nokoDryRun {
+					nokoClient = noko.NewClient(nokoToken, nil)
+				}
+
+				if nokoDryRun {
+					fmt.Fprintln(cmd.OutOrStdout())
+					fmt.Fprintln(cmd.OutOrStdout(), "─── Noko dry run ──────────────────────────────────────────")
+				}
+				pushed := 0
+				for _, day := range days {
+					for _, sess := range day.Sessions {
+						repos := getUniqueReposForSession(sess)
+						groups := groupByProject(repos, cfg.Noko)
+						minutesPerGroup := sess.FuzzyHours * 60 / len(groups)
+						if minutesPerGroup < 1 {
+							minutesPerGroup = 1
+						}
+						for projID, projRepos := range groups {
+							desc := strings.Join(projRepos, ", ")
+							if len(sess.Commits) > 0 {
+								desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
+							}
+
+							if nokoDryRun {
+								fmt.Fprintf(cmd.OutOrStdout(), "  %s  %dm  project=%d  %s\n", day.Day, minutesPerGroup, projID, desc)
+							} else {
+								entry := noko.EntryRequest{
+									Date:        day.Day,
+									Minutes:     minutesPerGroup,
+									Description: desc,
+									ProjectID:   projID,
+								}
+								if err := nokoClient.CreateEntry(context.Background(), entry); err != nil {
+									return fmt.Errorf("push session %s %s: %w", day.Day, desc, err)
+								}
+							}
+							pushed++
+						}
+					}
+				}
+				label := "pushed"
+				if nokoDryRun {
+					label = "would push"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %d sessions to Noko\n", label, pushed)
+			}
+
 			// Print flag summary
 			fmt.Fprintln(cmd.OutOrStdout())
 			fmt.Fprintln(cmd.OutOrStdout(), "flags used:")
@@ -414,6 +478,15 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			if showCommits {
 				fmt.Fprintln(cmd.OutOrStdout(), "  --show-commits")
 			}
+			if pushNoko {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --push-noko")
+			}
+			if nokoDryRun {
+				fmt.Fprintln(cmd.OutOrStdout(), "  --noko-dry-run")
+			}
+			if nokoTokenInput != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --noko-token %s\n", nokoTokenInput)
+			}
 			return nil
 		},
 	}
@@ -429,6 +502,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan (used with --local)")
 	cmd.Flags().BoolVar(&discoverSubmodules, "discover-submodules", false, "Automatically discover git repositories in subdirectories")
 	cmd.Flags().BoolVar(&showCommits, "show-commits", false, "Show individual commits within each session")
+	cmd.Flags().BoolVar(&pushNoko, "push-noko", false, "Push session summaries to Noko")
+	cmd.Flags().BoolVar(&nokoDryRun, "noko-dry-run", false, "Print what would be pushed to Noko without actually posting")
+	cmd.Flags().StringVar(&nokoTokenInput, "noko-token", "", "Noko API token (defaults to NOKO_TOKEN env var or noko.api_token in config)")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 3, "Maximum depth for submodule discovery (default: 3)")
 	cmd.Flags().StringSliceVar(&reposInput, "repos", nil, "Repositories to scan (owner/repo format, overrides config file)")
 
@@ -495,6 +571,17 @@ func getUniqueReposForSession(s session.Session) []string {
 	}
 	sort.Strings(repos)
 	return repos
+}
+
+// groupByProject groups repos by their Noko project ID.
+// Repos without a project mapping fall into project 0.
+func groupByProject(repos []string, nc *config.NokoConfig) map[int][]string {
+	groups := make(map[int][]string)
+	for _, r := range repos {
+		projID, _ := nc.ProjectForRepo(r)
+		groups[projID] = append(groups[projID], r)
+	}
+	return groups
 }
 
 func calculateMonthSummaries(days []session.DaySummary) []struct {
