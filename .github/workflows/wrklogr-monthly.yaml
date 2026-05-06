@@ -178,95 +178,124 @@ jobs:
             GCAL_FLAG="--gcal"
           fi
 
-          mkdir -p /tmp/wiki-pages
+          mkdir -p "/tmp/wiki-pages/${MONTH_LABEL}"
 
           if [ -z "${AUTHORS}" ]; then
             printf 'No contributors found in this period.\n' > /tmp/wiki-pages/_empty
           else
             for AUTHOR in ${AUTHORS}; do
-              PAGE="${AUTHOR}.md"
+              PAGE="${MONTH_LABEL}/${AUTHOR}.md"
 
-              # Get project breakdown from noko dry-run
-              PROJECT_TABLE=""
-              if [ -n "${{ secrets.NOKO_TOKEN }}" ]; then
-                NOKIO_OUTPUT=$(/tmp/wrklogr report \
-                  --config /tmp/wrklogr.toml \
-                  --since "${SINCE}" \
-                  --until "${UNTIL}" \
-                  --local=false \
-                  --author "${AUTHOR}" \
-                  ${REPOS_FLAG} \
-                  --noko-dry-run \
-                  2>&1 || true)
+              # Run report with show-commits + noko-dry-run to get everything
+              COMBINED=$(/tmp/wrklogr report \
+                --config /tmp/wrklogr.toml \
+                --since "${SINCE}" --until "${UNTIL}" --local=false \
+                --author "${AUTHOR}" ${REPOS_FLAG} ${SHOW_COMMITS_FLAG} ${GCAL_FLAG} --noko-dry-run 2>&1 || true)
 
-                declare -A PROJECT_HOURS
-                while IFS= read -r LINE; do
-                  if [[ $LINE =~ ^[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]+([0-9]+)m[[:space:]]+project=([0-9]+)[[:space:]]+(.+) ]]; then
-                    MINUTES="${BASH_REMATCH[2]}"
-                    PROJ_ID="${BASH_REMATCH[3]}"
-                    if [ "$PROJ_ID" = "0" ]; then
-                      continue
-                    fi
-                    HOURS=$(( (MINUTES + 59) / 60 ))
-                    OLD_HOURS=${PROJECT_HOURS[$PROJ_ID]:-0}
-                    PROJECT_HOURS[$PROJ_ID]=$((OLD_HOURS + HOURS))
-                    PROJECT_IDS[$PROJ_ID]=1
-                  fi
-                done <<< "$NOKIO_OUTPUT"
-
-                if [ ${#PROJECT_HOURS[@]} -gt 0 ]; then
-                  printf '## Summary by Project\n\n' > /tmp/project-table.txt
-                  printf '| Project | Hours |\n' >> /tmp/project-table.txt
-                  printf '|---------|-------|\n' >> /tmp/project-table.txt
-                  for PROJ_ID in "${!PROJECT_HOURS[@]}"; do
-                    NAME="Project $PROJ_ID"
-                    case "$PROJ_ID" in
-                      687237) NAME="Bean" ;;
-                      708823) NAME="Third Eye" ;;
-                      716638) NAME="Dear Freeda (TMV)" ;;
-                      586501) NAME="Dublab" ;;
-                      611157) NAME="Salon 94" ;;
-                      560046) NAME="Jono Pandolfi" ;;
-                      607240) NAME="Farm To People" ;;
-                      557928) NAME="Culinistas" ;;
-                      595328) NAME="Minisocial" ;;
-                      615238) NAME="Tripoli Gallery" ;;
-                      606165) NAME="Max Levai" ;;
-                      662679) NAME="Ghia" ;;
-                      639789) NAME="Syng" ;;
-                      590606) NAME="Tartine" ;;
-                    esac
-                    printf '| %s | %sh |\n' "$NAME" "${PROJECT_HOURS[$PROJ_ID]}" >> /tmp/project-table.txt
-                  done
-                  printf '\n' >> /tmp/project-table.txt
-                  PROJECT_TABLE=$(cat /tmp/project-table.txt)
-                fi
+              # Split on noko separator
+              if echo "$COMBINED" | grep -q "Noko dry run"; then
+                REPORT_PART=$(echo "$COMBINED" | sed '/Noko dry run/Q')
+                NOKIO_PART=$(echo "$COMBINED" | sed -n '/Noko dry run/,$ p')
+              else
+                REPORT_PART="$COMBINED"
+                NOKIO_PART=""
               fi
 
-              # Get full report
-              REPORT=$(/tmp/wrklogr report \
-                --config /tmp/wrklogr.toml \
-                --since "${SINCE}" \
-                --until "${UNTIL}" \
-                --local=false \
-                --author "${AUTHOR}" \
-                ${REPOS_FLAG} \
-                ${SHOW_COMMITS_FLAG} \
-                ${GCAL_FLAG} \
-                2>&1 || true)
+              # Parse noko log lines per day
+              mkdir -p /tmp/nokio-logs
+              while IFS= read -r LINE; do
+                if [[ $LINE =~ ^[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]+([0-9]+)m[[:space:]]+project=([0-9]+)[[:space:]]+(.+) ]]; then
+                  D="${BASH_REMATCH[1]}"
+                  M="${BASH_REMATCH[2]}"
+                  P="${BASH_REMATCH[3]}"
+                  DESC="${BASH_REMATCH[4]}"
+                  if [ "$P" = "0" ]; then continue; fi
+                  PROJ_NAME="Project $P"
+                  case "$P" in
+                    687237) PROJ_NAME="Bean" ;;
+                    708823) PROJ_NAME="Third Eye" ;;
+                    716638) PROJ_NAME="Dear Freeda (TMV)" ;;
+                    586501) PROJ_NAME="Dublab" ;;
+                    611157) PROJ_NAME="Salon 94" ;;
+                    560046) PROJ_NAME="Jono Pandolfi" ;;
+                    607240) PROJ_NAME="Farm To People" ;;
+                    557928) PROJ_NAME="Culinistas" ;;
+                    595328) PROJ_NAME="Minisocial" ;;
+                    615238) PROJ_NAME="Tripoli Gallery" ;;
+                    606165) PROJ_NAME="Max Levai" ;;
+                    662679) PROJ_NAME="Ghia" ;;
+                    639789) PROJ_NAME="Syng" ;;
+                    590606) PROJ_NAME="Tartine" ;;
+                  esac
+                  H=$(( (M + 59) / 60 ))
+                  printf '  - %s · %sm · %s\n' "$D" "$M" "$DESC" >> "/tmp/nokio-logs/$P.txt"
+                  OLD_H=${PROJ_HOURS[$P]:-0}
+                  PROJ_HOURS[$P]=$((OLD_H + H))
+                fi
+              done <<< "$NOKIO_PART"
 
-              # Build the author page
+              rm -rf /tmp/nokio-logs
+
+              # Build project summary table
+              if [ ${#PROJ_HOURS[@]} -gt 0 ]; then
+                SUM_FILE=$(mktemp)
+                printf '## Summary\n\n' > "$SUM_FILE"
+                printf '| Project | Hours |\n' >> "$SUM_FILE"
+                printf '|---------|-------|\n' >> "$SUM_FILE"
+                TOTAL_H=0
+                for P in "${!PROJ_HOURS[@]}"; do
+                  PROJ_NAME="Project $P"
+                  case "$P" in
+                    687237) PROJ_NAME="Bean" ;; 708823) PROJ_NAME="Third Eye" ;;
+                    716638) PROJ_NAME="Dear Freeda (TMV)" ;; 586501) PROJ_NAME="Dublab" ;;
+                    611157) PROJ_NAME="Salon 94" ;; 560046) PROJ_NAME="Jono Pandolfi" ;;
+                    607240) PROJ_NAME="Farm To People" ;; 557928) PROJ_NAME="Culinistas" ;;
+                    595328) PROJ_NAME="Minisocial" ;; 615238) PROJ_NAME="Tripoli Gallery" ;;
+                    606165) PROJ_NAME="Max Levai" ;; 662679) PROJ_NAME="Ghia" ;;
+                    639789) PROJ_NAME="Syng" ;; 590606) PROJ_NAME="Tartine" ;;
+                  esac
+                  printf '| %s | %sh |\n' "$PROJ_NAME" "${PROJ_HOURS[$P]}" >> "$SUM_FILE"
+                  TOTAL_H=$((TOTAL_H + PROJ_HOURS[$P]))
+                done
+                printf '| **Total** | **%sh** |\n' "$TOTAL_H" >> "$SUM_FILE"
+              fi
+
+              # Build day-by-day page content
+              PAGE_FILE="/tmp/wiki-pages/${PAGE}"
               {
-                printf '# %s\n\n' "${AUTHOR}"
-                printf 'Period: %s to %s\n\n' "${SINCE}" "${UNTIL}"
-                printf '%s' "${PROJECT_TABLE}"
-                printf '## Details\n\n```\n'
-                printf '%s\n' "${REPORT}"
-                printf '```\n\n'
+                printf '# %s — %s\n\n' "${AUTHOR}" "${MONTH_LABEL}"
+                printf 'Period: %s → %s\n\n' "${SINCE}" "${UNTIL}"
+
+                if [ -n "$SUM_FILE" ]; then
+                  cat "$SUM_FILE"
+                  printf '\n'
+                fi
+
+                printf -- '---\n\n'
+
+                for PROJ_FILE in /tmp/nokio-logs/*.txt; do
+                  [ -f "$PROJ_FILE" ] || continue
+                  P=$(basename "$PROJ_FILE" .txt)
+                  PROJ_NAME="Project $P"
+                  case "$P" in
+                    687237) PROJ_NAME="Bean" ;; 708823) PROJ_NAME="Third Eye" ;;
+                    716638) PROJ_NAME="Dear Freeda (TMV)" ;; 586501) PROJ_NAME="Dublab" ;;
+                    611157) PROJ_NAME="Salon 94" ;; 560046) PROJ_NAME="Jono Pandolfi" ;;
+                    607240) PROJ_NAME="Farm To People" ;; 557928) PROJ_NAME="Culinistas" ;;
+                    595328) PROJ_NAME="Minisocial" ;; 615238) PROJ_NAME="Tripoli Gallery" ;;
+                    606165) PROJ_NAME="Max Levai" ;; 662679) PROJ_NAME="Ghia" ;;
+                    639789) PROJ_NAME="Syng" ;; 590606) PROJ_NAME="Tartine" ;;
+                  esac
+                  printf '## %s\n\n' "$PROJ_NAME"
+                  cat "$PROJ_FILE"
+                  printf '\n'
+                done
+
                 printf -- '---\n'
                 printf '_Generated by [wrklogr](%s) on %s_\n' "${REPO_URL}" "${NOW_UTC}"
-              } > "/tmp/wiki-pages/${PAGE}"
+              } > "$PAGE_FILE"
 
+              [ -n "$SUM_FILE" ] && rm -f "$SUM_FILE"
             done
           fi
 
@@ -315,21 +344,23 @@ jobs:
           # Remove old per-month pages
           git rm -f worklog-*.md 2>/dev/null || true
 
-          # Copy each author page
+          # Create month directory and copy author pages
+          mkdir -p "${MONTH_LABEL}"
           for AUTHOR in ${AUTHORS}; do
-            if [ -f "/tmp/wiki-pages/${AUTHOR}.md" ]; then
-              cp "/tmp/wiki-pages/${AUTHOR}.md" "${AUTHOR}.md"
-              git add "${AUTHOR}.md"
+            SRC="/tmp/wiki-pages/${MONTH_LABEL}/${AUTHOR}.md"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "${MONTH_LABEL}/${AUTHOR}.md"
+              git add "${MONTH_LABEL}/${AUTHOR}.md"
             fi
           done
 
-          # Build index page with links to all authors
+          # Build index page with links to all authors for this month
           {
             printf '# Worklogs\n\n'
             printf 'Monthly reports generated by [wrklogr](https://github.com/%s/%s).\n' "${OWNER}" "${REPO}"
             printf 'Period: %s\n\n' "${MONTH_LABEL}"
             for AUTHOR in ${AUTHORS}; do
-              printf -- '- [%s](./%s)\n' "${AUTHOR}" "${AUTHOR}"
+              printf -- '- [%s](./%s/%s)\n' "${AUTHOR}" "${MONTH_LABEL}" "${AUTHOR}"
             done
             printf '\n'
           } > Worklogs.md
