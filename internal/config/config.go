@@ -22,7 +22,6 @@ type Config struct {
 }
 
 type GCalConfig struct {
-	Command  string `toml:"command"`
 	Calendar string `toml:"calendar"`
 }
 

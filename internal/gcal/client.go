@@ -1,15 +1,15 @@
 package gcal
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
-	"strconv"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-const timeLayout = "2006-01-02T15:04:05"
+const icalURL = "https://calendar.google.com/calendar/ical/%s/public/basic.ics"
 
 type Event struct {
 	Title  string
@@ -18,94 +18,149 @@ type Event struct {
 	Length time.Duration
 }
 
-func FetchEvents(gcalcliPath, calendar string, since, until time.Time) ([]Event, error) {
-	cmdPath := gcalcliPath
-	if cmdPath == "" {
-		var err error
-		cmdPath, err = exec.LookPath("gcalcli")
-		if err != nil {
-			return nil, fmt.Errorf("gcalcli not found in PATH; install with: pip3 install gcalcli")
-		}
+func FetchEvents(calendarID string, since, until time.Time) ([]Event, error) {
+	if calendarID == "" {
+		return nil, fmt.Errorf("calendar ID is required")
 	}
 
-	sinceStr := since.Format("2006-01-02")
-	untilStr := until.Format("2006-01-02")
+	icalURL := fmt.Sprintf(icalURL, url.QueryEscape(calendarID))
 
-	args := []string{
-		"--calendar", calendar,
-		"--tsv",
-		"--details", "title,time,length",
-		"agenda", sinceStr, untilStr,
+	resp, err := http.Get(icalURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch iCal feed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("iCal feed returned HTTP %d", resp.StatusCode)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command(cmdPath, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		stderrStr := strings.TrimSpace(stderr.String())
-		if stderrStr != "" {
-			return nil, fmt.Errorf("gcalcli failed: %s", stderrStr)
-		}
-		return nil, fmt.Errorf("gcalcli failed: %w", err)
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read iCal feed: %w", err)
 	}
 
-	return parseTSV(stdout.String())
+	return parseICS(string(raw), since, until)
 }
 
-func parseTSV(raw string) ([]Event, error) {
-	lines := strings.Split(strings.TrimSpace(raw), "\n")
-	events := make([]Event, 0, len(lines))
+func parseICS(raw string, since, until time.Time) ([]Event, error) {
+	events := make([]Event, 0)
+
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+
+	var inEvent bool
+	var title string
+	var dtStart, dtEnd string
 
 	for _, line := range lines {
-		fields := strings.Split(line, "\t")
-		if len(fields) < 4 {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
 
-		title := strings.TrimSpace(fields[0])
-		startStr := strings.TrimSpace(fields[1])
-		endStr := strings.TrimSpace(fields[2])
-		lenStr := strings.TrimSpace(fields[3])
-
-		if title == "" || startStr == "" {
+		if line == "BEGIN:VEVENT" {
+			inEvent = true
+			title = ""
+			dtStart = ""
+			dtEnd = ""
 			continue
 		}
 
-		start, err := time.Parse(timeLayout, startStr)
-		if err != nil {
-			continue
-		}
+		if line == "END:VEVENT" {
+			inEvent = false
+			if title == "" || dtStart == "" {
+				continue
+			}
 
-		var end time.Time
-		if endStr != "" {
-			end, err = time.Parse(timeLayout, endStr)
+			start, err := parseICalTime(dtStart)
 			if err != nil {
-				end = start
+				continue
 			}
-		} else {
-			end = start
+
+			end := start
+			if dtEnd != "" {
+				parsedEnd, err := parseICalTime(dtEnd)
+				if err == nil {
+					end = parsedEnd
+				}
+			}
+
+			if start.After(until) || end.Before(since) {
+				continue
+			}
+
+			length := end.Sub(start)
+			if length < 0 {
+				length = 0
+			}
+
+			events = append(events, Event{
+				Title:  title,
+				Start:  start,
+				End:    end,
+				Length: length,
+			})
+			continue
 		}
 
-		var length time.Duration
-		if lenStr != "" {
-			minutes, err := strconv.Atoi(lenStr)
-			if err == nil {
-				length = time.Duration(minutes) * time.Minute
-			}
-		}
-		if length == 0 {
-			length = end.Sub(start)
+		if !inEvent {
+			continue
 		}
 
-		events = append(events, Event{
-			Title:  title,
-			Start:  start,
-			End:    end,
-			Length: length,
-		})
+		if strings.HasPrefix(line, "SUMMARY:") {
+			title = strings.TrimPrefix(line, "SUMMARY:")
+			title = unescapeICalText(title)
+			continue
+		}
+
+		if strings.HasPrefix(line, "DTSTART") {
+			dtStart = extractICalValue(line)
+			continue
+		}
+
+		if strings.HasPrefix(line, "DTEND") {
+			dtEnd = extractICalValue(line)
+			continue
+		}
 	}
 
 	return events, nil
+}
+
+func extractICalValue(line string) string {
+	idx := strings.Index(line, ":")
+	if idx < 0 {
+		return ""
+	}
+	return line[idx+1:]
+}
+
+func parseICalTime(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+
+	// UTC format: 20260425T090000Z
+	if strings.HasSuffix(s, "Z") {
+		s = strings.TrimSuffix(s, "Z")
+		if len(s) >= 15 {
+			return time.Parse("20060102T150405", s)
+		}
+		return time.Parse("20060102", s)
+	}
+
+	// Local time (no TZID): 20260425T090000
+	if len(s) >= 15 {
+		return time.Parse("20060102T150405", s)
+	}
+
+	// Date only: 20260425
+	return time.Parse("20060102", s)
+}
+
+func unescapeICalText(s string) string {
+	s = strings.ReplaceAll(s, `\,`, ",")
+	s = strings.ReplaceAll(s, `\;`, ";")
+	s = strings.ReplaceAll(s, `\\`, "\\")
+	s = strings.ReplaceAll(s, `\n`, " ")
+	s = strings.ReplaceAll(s, `\N`, " ")
+	return s
 }

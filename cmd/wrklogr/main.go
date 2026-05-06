@@ -324,18 +324,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			days := session.BucketByDay(sessions, reportTZ)
 
 			if gcalFlag {
-				gcalCmd := ""
 				gcalCal := "seb@bean.la"
-				if cfg.GCal != nil {
-					if cfg.GCal.Command != "" {
-						gcalCmd = cfg.GCal.Command
-					}
-					if cfg.GCal.Calendar != "" {
-						gcalCal = cfg.GCal.Calendar
-					}
-				}
-				if gcalCal == "" {
-					return fmt.Errorf("--gcal requires a calendar email; set gcal.calendar in wrklogr.toml")
+				if cfg.GCal != nil && cfg.GCal.Calendar != "" {
+					gcalCal = cfg.GCal.Calendar
 				}
 
 				gcalSince := time.Now().AddDate(0, -1, 0)
@@ -347,7 +338,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					gcalUntil = *until
 				}
 
-				events, err := gcal.FetchEvents(gcalCmd, gcalCal, gcalSince, gcalUntil)
+				events, err := gcal.FetchEvents(gcalCal, gcalSince, gcalUntil)
 				if err != nil {
 					return fmt.Errorf("fetch calendar events: %w", err)
 				}
@@ -371,7 +362,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					sess := session.Session{
 						Commits: []session.Commit{
 							{
-								Repo:      "📅",
+								Repo:      "📅 " + ev.Title,
 								SHA:       "",
 								Message:   ev.Title,
 								Timestamp: ev.Start,

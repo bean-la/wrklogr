@@ -5,15 +5,28 @@ import (
 	"time"
 )
 
-func TestParseTSV(t *testing.T) {
+func TestParseICS(t *testing.T) {
 	t.Parallel()
 
-	raw := "Team standup\t2026-04-25T09:00:00\t2026-04-25T09:30:00\t30\n" +
-		"Client call\t2026-04-25T14:00:00\t2026-04-25T14:45:00\t45\n"
+	raw := `BEGIN:VCALENDAR
+BEGIN:VEVENT
+DTSTART:20260425T090000Z
+DTEND:20260425T093000Z
+SUMMARY:Team standup
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20260425T140000Z
+DTEND:20260425T144500Z
+SUMMARY:Client call
+END:VEVENT
+END:VCALENDAR`
 
-	events, err := parseTSV(raw)
+	since := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 4, 30, 23, 59, 59, 0, time.UTC)
+
+	events, err := parseICS(raw, since, until)
 	if err != nil {
-		t.Fatalf("parseTSV returned error: %v", err)
+		t.Fatalf("parseICS returned error: %v", err)
 	}
 
 	if len(events) != 2 {
@@ -31,34 +44,74 @@ func TestParseTSV(t *testing.T) {
 	}
 }
 
-func TestParseTSVEmpty(t *testing.T) {
+func TestParseICSFiltersByDateRange(t *testing.T) {
 	t.Parallel()
 
-	events, err := parseTSV("")
+	raw := `BEGIN:VCALENDAR
+BEGIN:VEVENT
+DTSTART:20260301T100000Z
+DTEND:20260301T110000Z
+SUMMARY:March event
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20260501T100000Z
+DTEND:20260501T110000Z
+SUMMARY:May event
+END:VEVENT
+END:VCALENDAR`
+
+	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 3, 31, 23, 59, 59, 0, time.UTC)
+
+	events, err := parseICS(raw, since, until)
 	if err != nil {
-		t.Fatalf("parseTSV returned error: %v", err)
+		t.Fatalf("parseICS returned error: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Title != "March event" {
+		t.Fatalf("expected 'March event', got %q", events[0].Title)
+	}
+}
+
+func TestParseICSEmpty(t *testing.T) {
+	t.Parallel()
+
+	raw := `BEGIN:VCALENDAR
+END:VCALENDAR`
+
+	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	events, err := parseICS(raw, since, until)
+	if err != nil {
+		t.Fatalf("parseICS returned error: %v", err)
 	}
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events, got %d", len(events))
 	}
 }
 
-func TestParseTSVSkipInvalid(t *testing.T) {
+func TestUnescapeICalText(t *testing.T) {
 	t.Parallel()
 
-	raw := "Valid\t2026-04-25T10:00:00\t2026-04-25T11:00:00\t60\n" +
-		"BadDate\tnot-a-date\t\t\n" +
-		"\t2026-04-25T12:00:00\t\t\n"
-
-	events, err := parseTSV(raw)
-	if err != nil {
-		t.Fatalf("parseTSV returned error: %v", err)
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`Hello\, World`, "Hello, World"},
+		{`Foo\;Bar`, "Foo;Bar"},
+		{`A\\B`, `A\B`},
+		{`Line1\nLine2`, "Line1 Line2"},
+		{`Plain text`, "Plain text"},
 	}
 
-	if len(events) != 1 {
-		t.Fatalf("expected 1 valid event, got %d", len(events))
-	}
-	if events[0].Title != "Valid" {
-		t.Fatalf("expected title 'Valid', got %q", events[0].Title)
+	for _, tc := range tests {
+		got := unescapeICalText(tc.input)
+		if got != tc.want {
+			t.Fatalf("unescapeICalText(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
