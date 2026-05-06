@@ -121,7 +121,7 @@ jobs:
             while true; do
               DATA=$(gh api \
                 "/repos/${REPO}/commits?since=${SINCE}T00:00:00Z&until=${UNTIL}T23:59:59Z&per_page=100&page=${PAGE}" \
-                --jq '.[].author.login // empty' 2>/dev/null)
+                --jq '.[].author.login // empty' 2>/dev/null || true)
               if [ -z "${DATA}" ]; then
                 break
               fi
