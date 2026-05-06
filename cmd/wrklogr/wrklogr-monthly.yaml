@@ -194,14 +194,14 @@ jobs:
               # Split on noko separator
               if echo "$COMBINED" | grep -q "Noko dry run"; then
                 REPORT_PART=$(echo "$COMBINED" | sed '/Noko dry run/Q')
-                NOKIO_PART=$(echo "$COMBINED" | sed -n '/Noko dry run/,$ p')
+                NOKO_PART=$(echo "$COMBINED" | sed -n '/Noko dry run/,$ p')
               else
                 REPORT_PART="$COMBINED"
-                NOKIO_PART=""
+                NOKO_PART=""
               fi
 
               # Parse noko log lines per day
-              mkdir -p /tmp/nokio-logs
+              mkdir -p /tmp/noko-logs
               while IFS= read -r LINE; do
                 if [[ $LINE =~ ^[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]+([0-9]+)m[[:space:]]+project=([0-9]+)[[:space:]]+(.+) ]]; then
                   D="${BASH_REMATCH[1]}"
@@ -227,13 +227,13 @@ jobs:
                     590606) PROJ_NAME="Tartine" ;;
                   esac
                   H=$(( (M + 59) / 60 ))
-                  printf '  - %s · %sm · %s\n' "$D" "$M" "$DESC" >> "/tmp/nokio-logs/$P.txt"
+                  printf '  - %s · %sm · %s\n' "$D" "$M" "$DESC" >> "/tmp/noko-logs/$P.txt"
                   OLD_H=${PROJ_HOURS[$P]:-0}
                   PROJ_HOURS[$P]=$((OLD_H + H))
                 fi
-              done <<< "$NOKIO_PART"
+              done <<< "$NOKO_PART"
 
-              rm -rf /tmp/nokio-logs
+              rm -rf /tmp/noko-logs
 
               # Build project summary table
               if [ ${#PROJ_HOURS[@]} -gt 0 ]; then
@@ -272,7 +272,7 @@ jobs:
 
                 printf -- '---\n\n'
 
-                for PROJ_FILE in /tmp/nokio-logs/*.txt; do
+                for PROJ_FILE in /tmp/noko-logs/*.txt; do
                   [ -f "$PROJ_FILE" ] || continue
                   P=$(basename "$PROJ_FILE" .txt)
                   PROJ_NAME="Project $P"
