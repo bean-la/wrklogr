@@ -493,6 +493,11 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 								desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
 							}
 
+							summary := summarizeSession(sess, projRepos)
+							if summary != "" {
+								desc += ": " + summary
+							}
+
 							if nokoDryRun {
 								fmt.Fprintf(cmd.OutOrStdout(), "  %s  %dm  project=%d  %s\n", day.Day, minutesPerGroup, projID, desc)
 							} else {
@@ -659,6 +664,40 @@ func groupByProject(repos []string, nc *config.NokoConfig) map[int][]string {
 		groups[projID] = append(groups[projID], r)
 	}
 	return groups
+}
+
+// summarizeSession extracts a short summary of unique commit messages
+// for commits belonging to the given repos, limited to 3 items.
+func summarizeSession(sess session.Session, repos []string) string {
+	repoSet := make(map[string]struct{}, len(repos))
+	for _, r := range repos {
+		repoSet[r] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	msgs := make([]string, 0, 3)
+	for _, c := range sess.Commits {
+		if _, ok := repoSet[c.Repo]; !ok {
+			continue
+		}
+		msg := strings.SplitN(c.Message, "\n", 2)[0]
+		msg = strings.TrimSpace(msg)
+		if msg == "" {
+			continue
+		}
+		if _, ok := seen[msg]; ok {
+			continue
+		}
+		seen[msg] = struct{}{}
+		if len(msg) > 55 {
+			msg = msg[:55] + "..."
+		}
+		msgs = append(msgs, msg)
+		if len(msgs) >= 3 {
+			break
+		}
+	}
+	return strings.Join(msgs, "; ")
 }
 
 func calculateMonthSummaries(days []session.DaySummary) []struct {
