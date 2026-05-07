@@ -152,10 +152,19 @@ jobs:
             FLAGS="${FLAGS} --gcal"
           fi
 
+          ORG_FLAGS=""
+          for ORG in ${ORGS}; do
+            ORG_FLAGS="${ORG_FLAGS} --orgs ${ORG}"
+          done
+          AUTHOR_FLAGS=""
+          for AUTHOR in ${AUTHORS}; do
+            AUTHOR_FLAGS="${AUTHOR_FLAGS} --authors ${AUTHOR}"
+          done
+
           /tmp/wrklogr generate-wiki \
             --config /tmp/wrklogr.toml \
-            --orgs ${ORGS} \
-            --authors ${AUTHORS} \
+            ${ORG_FLAGS} \
+            ${AUTHOR_FLAGS} \
             --since "${SINCE}" --until "${UNTIL}" \
             --output /tmp/wiki-pages \
             --noko-dry-run \
