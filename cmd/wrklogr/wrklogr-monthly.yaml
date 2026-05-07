@@ -128,7 +128,7 @@ jobs:
           if [ "${{ inputs.show-commits }}" = "true" ]; then
             FLAGS="${FLAGS} --show-commits"
           fi
-          if [ "${{ inputs.gcal }}" = "true" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ]; then
+          if [ "${{ vars.WRKLOGR_NO_GCAL }}" != "true" ] && [ "${{ inputs.gcal }}" != "false" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ]; then
             FLAGS="${FLAGS} --gcal"
           fi
 
@@ -153,7 +153,7 @@ jobs:
             --local=false \
             --author "${{ github.actor }}" \
             --push-noko \
-            $([ "${{ inputs.gcal }}" = "true" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ] && echo "--gcal")
+            $([ "${{ vars.WRKLOGR_NO_GCAL }}" != "true" ] && [ "${{ inputs.gcal }}" != "false" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ] && echo "--gcal")
 
       - name: Push to wiki
         shell: bash
@@ -208,7 +208,7 @@ jobs:
 
           {
             printf '[Home](./Home)\n\n'
-            for D in [0-9][0-9]-[0-9][0-9][0-9][0-9]; do
+            for D in [0-9][0-9][0-9][0-9]-[0-9][0-9] [0-9][0-9]-[0-9][0-9][0-9][0-9]; do
               [ -d "$D" ] || continue
               printf '### %s\n' "$D"
               for F in "$D"/*.md; do
