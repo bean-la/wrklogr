@@ -12,10 +12,8 @@ import (
 
 	"github.com/bean-la/wrklogr/internal/config"
 	ghclient "github.com/bean-la/wrklogr/internal/github"
-	gcal "github.com/bean-la/wrklogr/internal/gcal"
 	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/localgit"
-	noko "github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
 	gh "github.com/google/go-github/v67/github"
 	"github.com/spf13/cobra"
@@ -70,6 +68,18 @@ into work sessions, and emits Markdown (and optionally JSON) reports.`,
 	root.AddCommand(newInstallWorkflowCmd())
 	root.AddCommand(newOnboardCmd())
 	root.AddCommand(newReviewCmd(func() (*config.RuntimeConfig, error) {
+		if cfg == nil {
+			return nil, fmt.Errorf("config is not loaded")
+		}
+		return cfg, nil
+	}))
+	root.AddCommand(newGenerateWikiCmd(func() (*config.RuntimeConfig, error) {
+		if cfg == nil {
+			return nil, fmt.Errorf("config is not loaded")
+		}
+		return cfg, nil
+	}))
+	root.AddCommand(newCacheCmd(func() (*config.RuntimeConfig, error) {
 		if cfg == nil {
 			return nil, fmt.Errorf("config is not loaded")
 		}
@@ -285,177 +295,24 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					return fmt.Errorf("no repositories configured; set repos in wrklogr.toml or use --repos")
 				}
 
-				client := ghclient.NewClient(authToken, nil)
-				ctx := context.Background()
+				gcalCal := ""
+				if cfg.GCal != nil {
+					gcalCal = cfg.GCal.Calendar
+				}
 
-				var viewer *ghclient.ViewerIdentity
+				var meAuthor string
 				if meOnly {
+					client := ghclient.NewClient(authToken, nil)
+					ctx := context.Background()
 					identity, identityErr := client.GetViewerIdentity(ctx)
 					if identityErr != nil {
 						return fmt.Errorf("resolve --me identity: %w", identityErr)
 					}
-					viewer = identity
+					meAuthor = identity.Login
 				} else if authorFilter != "" {
-					viewer = &ghclient.ViewerIdentity{
-						Login:  authorFilter,
-						Emails: map[string]struct{}{},
-					}
+					meAuthor = authorFilter
 				}
 
-				for _, fullRepo := range repos {
-					owner, repoName, parseErr := splitRepo(fullRepo)
-					if parseErr != nil {
-						return parseErr
-					}
-
-					commits, fetchErr := client.ListCommits(ctx, owner, repoName, since, until)
-					if fetchErr != nil {
-						return fetchErr
-					}
-					filtered := 0
-					for _, c := range commits {
-						if viewer != nil && !commitMatchesViewer(c, viewer) {
-							continue
-						}
-						normalized, ok := normalizeCommit(fullRepo, c)
-						if !ok {
-							continue
-						}
-						merged = append(merged, normalized)
-						filtered++
-					}
-					total += filtered
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", fullRepo, filtered)
-				}
-			}
-
-			sort.Slice(merged, func(i, j int) bool {
-				return merged[i].Timestamp.Before(merged[j].Timestamp)
-			})
-			sessions := session.Build(merged, sessionGap)
-			days := session.BucketByDay(sessions, reportTZ)
-
-			if gcalFlag {
-				gcalCal := "seb@bean.la"
-				if cfg.GCal != nil && cfg.GCal.Calendar != "" {
-					gcalCal = cfg.GCal.Calendar
-				}
-
-				gcalSince := time.Now().AddDate(0, -1, 0)
-				gcalUntil := time.Now()
-				if since != nil {
-					gcalSince = *since
-				}
-				if until != nil {
-					gcalUntil = *until
-				}
-
-				events, err := gcal.FetchEvents(gcalCal, gcalSince, gcalUntil)
-				if err != nil {
-					return fmt.Errorf("fetch calendar events: %w", err)
-				}
-				if len(events) > 0 {
-					fmt.Fprintf(cmd.OutOrStdout(), "calendar: %d events\n", len(events))
-				}
-
-				dayMap := make(map[string]*session.DaySummary)
-				for i := range days {
-					dayMap[days[i].Day] = &days[i]
-				}
-
-				for _, ev := range events {
-					dayKey := ev.Start.Format("2006-01-02")
-					minutes := int(ev.Length.Minutes())
-					if minutes < 1 {
-						minutes = 1
-					}
-					fuzzyHours := (minutes + 59) / 60
-
-					sess := session.Session{
-						Commits: []session.Commit{
-							{
-								Repo:      "📅 " + ev.Title,
-								SHA:       "",
-								Message:   ev.Title,
-								Timestamp: ev.Start,
-							},
-						},
-						Start:      ev.Start,
-						End:        ev.End,
-						FuzzyHours: fuzzyHours,
-					}
-
-				if ds, ok := dayMap[dayKey]; ok {
-					ds.Sessions = append(ds.Sessions, sess)
-					ds.TotalHours += fuzzyHours
-				}
-				}
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "total: %d commits\n", total)
-			for _, day := range days {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%d sessions)\n", day.Day, day.TotalHours, len(day.Sessions))
-				for i, sess := range day.Sessions {
-					repos := getUniqueReposForSession(sess)
-					repoStr := strings.Join(repos, ", ")
-					fmt.Fprintf(cmd.OutOrStdout(), "  session %d: %dh [%s]\n", i+1, sess.FuzzyHours, repoStr)
-					if showCommits {
-						commitIdx := 0
-						for j := 0; j < len(sess.Commits); {
-							c := sess.Commits[j]
-							// Truncate message to first line and limit length
-							msg := strings.SplitN(c.Message, "\n", 2)[0]
-							if len(msg) > 60 {
-								msg = msg[:60] + "..."
-							}
-
-							// Count consecutive duplicates (same message, different SHA)
-							dupCount := 1
-							for k := j + 1; k < len(sess.Commits); k++ {
-								nextMsg := strings.SplitN(sess.Commits[k].Message, "\n", 2)[0]
-								if len(nextMsg) > 60 {
-									nextMsg = nextMsg[:60] + "..."
-								}
-								if nextMsg == msg {
-									dupCount++
-								} else {
-									break
-								}
-							}
-
-							commitIdx++
-							if dupCount > 1 {
-								fmt.Fprintf(cmd.OutOrStdout(), "    commit %d: %s %s (x%d)\n", commitIdx, c.SHA[:8], msg, dupCount)
-								j += dupCount
-							} else {
-								fmt.Fprintf(cmd.OutOrStdout(), "    commit %d: %s %s\n", commitIdx, c.SHA[:8], msg)
-								j++
-							}
-						}
-					}
-				}
-			}
-
-			// Print month summaries
-			months := calculateMonthSummaries(days)
-			if len(months) > 0 {
-				fmt.Fprintln(cmd.OutOrStdout())
-				for _, m := range months {
-					days := float64(m.TotalHours) / 8.0
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%.1f days)\n", m.Month, m.TotalHours, days)
-				}
-			}
-
-			// Print grand total
-			grandTotal := 0
-			for _, day := range days {
-				grandTotal += day.TotalHours
-			}
-			fmt.Fprintln(cmd.OutOrStdout())
-			grandTotalDays := float64(grandTotal) / 8.0
-			fmt.Fprintf(cmd.OutOrStdout(), "grand total: %dh (%.1f days)\n", grandTotal, grandTotalDays)
-
-			if pushNoko || nokoDryRun {
 				nokoToken := strings.TrimSpace(nokoTokenInput)
 				if nokoToken == "" {
 					nokoToken = strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
@@ -463,84 +320,111 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				if nokoToken == "" && cfg.Noko != nil {
 					nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
 				}
-				if nokoToken == "" && !nokoDryRun {
+				if nokoToken == "" && pushNoko && !nokoDryRun {
 					return fmt.Errorf("--push-noko requires a Noko API token; set --noko-token, NOKO_TOKEN, or noko.api_token in config")
 				}
 
-				var nokoClient *noko.Client
-				if !nokoDryRun {
-					nokoClient = noko.NewClient(nokoToken, nil)
+				llmCfg := resolveLLMConfig(cfg, llmAPIKey, llmModel)
+
+				opts := reportOpts{
+					Repos:         repos,
+					Since:         since,
+					Until:         until,
+					Author:        meAuthor,
+					SessionGap:    sessionGap,
+					Timezone:      reportTZ,
+					GCalFlag:      gcalFlag,
+					GCalCalendar:  gcalCal,
+					NokoDryRun:    nokoDryRun,
+					NokoPush:      pushNoko,
+					NokoToken:     nokoToken,
+					NokoConfig:    cfg.Noko,
+					LLMSummarize:  llmSummarize,
+					LLMConfig:     &llmCfg,
+					GitHubToken:   authToken,
+					MinLogMinutes: minLogMinutes,
 				}
 
-				if nokoDryRun {
+				result, runErr := runReport(context.Background(), cmd.OutOrStdout(), opts)
+				if runErr != nil {
+					return runErr
+				}
+
+				fmt.Fprintf(cmd.OutOrStdout(), "total: %d commits\n", result.TotalCommits)
+				for _, day := range result.Days {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%d sessions)\n", day.Day, day.TotalHours, len(day.Sessions))
+					for i, sess := range day.Sessions {
+						repos := getUniqueReposForSession(sess)
+						repoStr := strings.Join(repos, ", ")
+						fmt.Fprintf(cmd.OutOrStdout(), "  session %d: %dh [%s]\n", i+1, sess.FuzzyHours, repoStr)
+						if showCommits {
+							commitIdx := 0
+							for j := 0; j < len(sess.Commits); {
+								c := sess.Commits[j]
+								msg := strings.SplitN(c.Message, "\n", 2)[0]
+								if len(msg) > 60 {
+									msg = msg[:60] + "..."
+								}
+
+								dupCount := 1
+								for k := j + 1; k < len(sess.Commits); k++ {
+									nextMsg := strings.SplitN(sess.Commits[k].Message, "\n", 2)[0]
+									if len(nextMsg) > 60 {
+										nextMsg = nextMsg[:60] + "..."
+									}
+									if nextMsg == msg {
+										dupCount++
+									} else {
+										break
+									}
+								}
+
+								commitIdx++
+								sha := ""
+								if len(c.SHA) >= 8 {
+									sha = c.SHA[:8]
+								}
+								if dupCount > 1 {
+									fmt.Fprintf(cmd.OutOrStdout(), "    commit %d: %s %s (x%d)\n", commitIdx, sha, msg, dupCount)
+									j += dupCount
+								} else {
+									fmt.Fprintf(cmd.OutOrStdout(), "    commit %d: %s %s\n", commitIdx, sha, msg)
+									j++
+								}
+							}
+						}
+					}
+				}
+
+				months := calculateMonthSummaries(result.Days)
+				if len(months) > 0 {
+					fmt.Fprintln(cmd.OutOrStdout())
+					for _, m := range months {
+						days := float64(m.TotalHours) / 8.0
+						fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%.1f days)\n", m.Month, m.TotalHours, days)
+					}
+				}
+
+				grandTotal := 0
+				for _, day := range result.Days {
+					grandTotal += day.TotalHours
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+				grandTotalDays := float64(grandTotal) / 8.0
+				fmt.Fprintf(cmd.OutOrStdout(), "grand total: %dh (%.1f days)\n", grandTotal, grandTotalDays)
+
+				if nokoDryRun && len(result.NokoEntries) > 0 {
 					fmt.Fprintln(cmd.OutOrStdout())
 					fmt.Fprintln(cmd.OutOrStdout(), "─── Noko dry run ──────────────────────────────────────────")
-				}
-
-				var llmClient *llm.Client
-				if llmSummarize {
-					llmCfg := resolveLLMConfig(cfg, llmAPIKey, llmModel)
-					if llmCfg.APIKey != "" {
-						llmClient = llm.NewClient(llmCfg)
+					for _, entry := range result.NokoEntries {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s  %dm  project=%d  %s\n",
+							entry.Date, entry.Minutes, entry.ProjectID, entry.Description)
 					}
+					fmt.Fprintf(cmd.OutOrStdout(), "would push %d sessions to Noko\n", len(result.NokoEntries))
 				}
-
-				pushed := 0
-				for _, day := range days {
-					for _, sess := range day.Sessions {
-						repos := getUniqueReposForSession(sess)
-						groups := groupByProject(repos, cfg.Noko)
-						minutesPerGroup := sess.FuzzyHours * 60 / len(groups)
-						if minutesPerGroup < 1 {
-							minutesPerGroup = 1
-						}
-						effectiveMin := minLogMinutes
-						if effectiveMin == 0 && cfg.Noko != nil && cfg.Noko.MinLogMinutes > 0 {
-							effectiveMin = cfg.Noko.MinLogMinutes
-						}
-						if effectiveMin > 0 && minutesPerGroup < effectiveMin {
-							minutesPerGroup = effectiveMin
-						}
-						for projID, projRepos := range groups {
-							if projID == 0 {
-								if nokoDryRun {
-									desc := strings.Join(projRepos, ", ")
-									fmt.Fprintf(cmd.OutOrStdout(), "  %s  %dm  project=%d  %s  (skipped — no project mapping)\n", day.Day, minutesPerGroup, projID, desc)
-								}
-								continue
-							}
-							desc := strings.Join(projRepos, ", ")
-							if len(sess.Commits) > 0 {
-								desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
-							}
-
-							summary := sessionSummary(sess, projRepos, llmClient)
-							if summary != "" {
-								desc += ": " + summary
-							}
-
-							if nokoDryRun {
-								fmt.Fprintf(cmd.OutOrStdout(), "  %s  %dm  project=%d  %s\n", day.Day, minutesPerGroup, projID, desc)
-							} else {
-								entry := noko.EntryRequest{
-									Date:        day.Day,
-									Minutes:     minutesPerGroup,
-									Description: desc,
-									ProjectID:   projID,
-								}
-								if err := nokoClient.CreateEntry(context.Background(), entry); err != nil {
-									return fmt.Errorf("push session %s %s: %w", day.Day, desc, err)
-								}
-							}
-							pushed++
-						}
-					}
+				if pushNoko {
+					fmt.Fprintf(cmd.OutOrStdout(), "pushed sessions to Noko\n")
 				}
-				label := "pushed"
-				if nokoDryRun {
-					label = "would push"
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %d sessions to Noko\n", label, pushed)
 			}
 
 			// Print flag summary

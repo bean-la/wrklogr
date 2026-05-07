@@ -23,19 +23,18 @@ func newInstallWorkflowCmd() *cobra.Command {
 		Long: `Create or update .github/workflows/wrklogr-monthly.yaml so that GitHub
 		Actions generates a monthly worklog report and publishes it to the wiki.
 
-		The workflow runs daily at 23:59 UTC and continuously updates the current
-		month's wiki page with the latest data. It collects all contributors in the
-		month-to-date range, sections the report per author, and pushes the result
-		as a single monthly wiki page (e.g. worklog-2025-03.md).
+		The workflow discovers repos from WRKLOGR_ORGS (GitHub orgs) and tracks
+		contributors listed in WRKLOGR_AUTHORS. It generates per-author wiki pages
+		with per-project hour summaries and publishes them to the wiki.
 
 		Prerequisites:
 		  - gh CLI installed and authenticated (gh auth login)
 		  - The repository must have the wiki enabled (Settings > Features > Wikis)
-		  - wrklogr.toml must list the repos to scan
 		  - For cross-org repos, create a fine-grained PAT with "Contents: Read"
 		    on those repos and save it as the WORKLOG_TOKEN secret.
 
-		After installation, commit and push the workflow file, then test with:
+		After installation, set the required Actions variables, commit and push
+		the workflow file, then test with:
 		  gh workflow run wrklogr-monthly.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return installWorkflow(cmd, workflowPath)
@@ -104,7 +103,10 @@ func installWorkflow(cmd *cobra.Command, repoRoot string) error {
 	fmt.Fprintln(cmd.OutOrStdout())
 
 	if ownerRepo != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "  1. Make sure wrklogr.toml lists the repos to scan.\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "  1. Set the WRKLOGR_ORGS variable with space-separated\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "     GitHub org names to scan:\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "       https://github.com/%s/settings/variables/actions\n", ownerRepo)
+		fmt.Fprintf(cmd.OutOrStdout(), "     Also set WRKLOGR_AUTHORS with GitHub logins to track.\n")
 		fmt.Fprintln(cmd.OutOrStdout())
 		fmt.Fprintf(cmd.OutOrStdout(), "  2. Enable the wiki if it's off:\n")
 		fmt.Fprintf(cmd.OutOrStdout(), "       https://github.com/%s/settings\n", ownerRepo)

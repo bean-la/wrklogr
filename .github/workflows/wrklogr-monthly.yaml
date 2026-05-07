@@ -5,14 +5,14 @@
 # How it works:
 #   1. Downloads the latest wrklogr binary from the GitHub release
 #   2. Determines the full previous month range
-#   3. Gathers unique contributors via the GitHub API
-#   4. For each contributor, generates a wiki page with a per-project hour
-#      summary (from --noko-dry-run) and the full report details
+#   3. Discovers repos from configured orgs and matching authors
+#   4. Generates wiki pages with per-project hour summaries and daily logs
 #   5. Pushes the pages to the wiki, updating the index
 #
 # Required setup:
 #   - The repository must have the wiki enabled (Settings > Features > Wikis)
-#   - WRKLOGR_REPOS variable set with all repos to scan (space-separated)
+#   - WRKLOGR_ORGS variable set with space-separated GitHub org names
+#   - WRKLOGR_AUTHORS variable set with space-separated GitHub logins
 #   - GCAL_CALENDAR variable set with Google Calendar ID for iCal events
 #   - WORKLOG_TOKEN secret: classic PAT with repo scope (cross-org access)
 #   - NOKO_TOKEN secret: Noko API token (for project summaries and push)
@@ -21,7 +21,6 @@ name: Monthly Worklog
 
 on:
   schedule:
-    # Run at 02:00 UTC on the 1st of every month
     - cron: "0 2 1 * *"
   workflow_dispatch:
     inputs:
@@ -34,7 +33,7 @@ on:
         required: false
         default: ""
       author:
-        description: "GitHub login to filter by (leave empty for all authors)"
+        description: "GitHub login to filter by (overrides WRKLOGR_AUTHORS)"
         required: false
         default: ""
       show-commits:
@@ -62,7 +61,7 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed to push to the wiki (separate ref)
+      contents: write
 
     steps:
       - name: Download wrklogr binary
@@ -89,25 +88,20 @@ jobs:
             SINCE=$(date -u -d "$(date -u '+%Y-%m-01') - 1 month" '+%Y-%m-01')
             UNTIL=$(date -u -d "${SINCE} + 1 month - 1 second" '+%Y-%m-%d')
           fi
-
           echo "since=${SINCE}" >> "${GITHUB_OUTPUT}"
           echo "until=${UNTIL}" >> "${GITHUB_OUTPUT}"
-
-          MONTH_LABEL=$(date -u -d "${SINCE}" '+%m-%Y')
+          MONTH_LABEL=$(date -u -d "${SINCE}" '+%Y-%m')
           echo "month_label=${MONTH_LABEL}" >> "${GITHUB_OUTPUT}"
 
-      - name: Gather contributors
-        id: contributors
+      - name: Resolve authors
+        id: authors
         shell: bash
         run: |
-          # Explicit author override via workflow dispatch
           if [ -n "${{ inputs.author }}" ]; then
             echo "authors=${{ inputs.author }}" >> "${GITHUB_OUTPUT}"
           else
-            echo "authors=sebbean nphillips" >> "${GITHUB_OUTPUT}"
+            echo "authors=${{ vars.WRKLOGR_AUTHORS }}" >> "${GITHUB_OUTPUT}"
           fi
-
-          echo "repos=${{ vars.WRKLOGR_REPOS }}" >> "${GITHUB_OUTPUT}"
 
       - name: Create wrklogr config
         shell: bash
@@ -115,9 +109,6 @@ jobs:
           cat > /tmp/wrklogr.toml << CONFIG
           session_gap = "2h"
           timezone = "UTC"
-          repos = [
-          $(for R in ${{ vars.WRKLOGR_REPOS }}; do echo "  \"$R\","; done)
-          ]
 
           [noko]
           min_log_minutes = 60
@@ -143,157 +134,33 @@ jobs:
           calendar = "${{ vars.GCAL_CALENDAR }}"
           CONFIG
 
-      - name: Generate author pages
+      - name: Generate wiki pages
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           SINCE="${{ steps.month.outputs.since }}"
           UNTIL="${{ steps.month.outputs.until }}"
-          MONTH_LABEL="${{ steps.month.outputs.month_label }}"
-          AUTHORS="${{ steps.contributors.outputs.authors }}"
-          REPOS="${{ steps.contributors.outputs.repos }}"
-          REPO_URL="https://github.com/${{ github.repository }}"
-          NOW_UTC=$(date -u '+%Y-%m-%d %H:%M UTC')
+          ORGS="${{ vars.WRKLOGR_ORGS }}"
+          AUTHORS="${{ steps.authors.outputs.authors }}"
 
-          SHOW_COMMITS_FLAG=""
+          FLAGS=""
           if [ "${{ inputs.show-commits }}" = "true" ]; then
-            SHOW_COMMITS_FLAG="--show-commits"
+            FLAGS="${FLAGS} --show-commits"
           fi
-          REPOS_FLAG=""
-          if [ -n "${REPOS}" ]; then
-            REPOS_CSV=$(echo "${REPOS}" | tr ' ' ',')
-            REPOS_FLAG="--repos ${REPOS_CSV}"
-          fi
-          GCAL_FLAG=""
           if [ "${{ inputs.gcal }}" = "true" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ]; then
-            GCAL_FLAG="--gcal"
+            FLAGS="${FLAGS} --gcal"
           fi
 
-          mkdir -p "/tmp/wiki-pages/${MONTH_LABEL}"
-
-          if [ -z "${AUTHORS}" ]; then
-            printf 'No contributors found in this period.\n' > /tmp/wiki-pages/_empty
-          else
-            for AUTHOR in ${AUTHORS}; do
-              PAGE="${MONTH_LABEL}/${AUTHOR}.md"
-
-              # Run report with show-commits + noko-dry-run to get everything
-              COMBINED=$(/tmp/wrklogr report \
-                --config /tmp/wrklogr.toml \
-                --since "${SINCE}" --until "${UNTIL}" --local=false \
-                --author "${AUTHOR}" ${REPOS_FLAG} ${SHOW_COMMITS_FLAG} ${GCAL_FLAG} --llm-summarize --noko-dry-run 2>&1 || true)
-
-              # Split on noko separator
-              if echo "$COMBINED" | grep -q "Noko dry run"; then
-                REPORT_PART=$(echo "$COMBINED" | sed '/Noko dry run/Q')
-                NOKO_PART=$(echo "$COMBINED" | sed -n '/Noko dry run/,$ p')
-              else
-                REPORT_PART="$COMBINED"
-                NOKO_PART=""
-              fi
-
-              # Parse noko log lines per day
-              mkdir -p /tmp/noko-logs
-              while IFS= read -r LINE; do
-                if [[ $LINE =~ ^[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]+([0-9]+)m[[:space:]]+project=([0-9]+)[[:space:]]+(.+) ]]; then
-                  D="${BASH_REMATCH[1]}"
-                  M="${BASH_REMATCH[2]}"
-                  P="${BASH_REMATCH[3]}"
-                  DESC="${BASH_REMATCH[4]}"
-                  if [ "$P" = "0" ]; then continue; fi
-                  PROJ_NAME="Project $P"
-                  case "$P" in
-                    687237) PROJ_NAME="Bean" ;;
-                    708823) PROJ_NAME="Third Eye" ;;
-                    716638) PROJ_NAME="Dear Freeda (TMV)" ;;
-                    586501) PROJ_NAME="Dublab" ;;
-                    611157) PROJ_NAME="Salon 94" ;;
-                    560046) PROJ_NAME="Jono Pandolfi" ;;
-                    607240) PROJ_NAME="Farm To People" ;;
-                    557928) PROJ_NAME="Culinistas" ;;
-                    595328) PROJ_NAME="Minisocial" ;;
-                    615238) PROJ_NAME="Tripoli Gallery" ;;
-                    606165) PROJ_NAME="Max Levai" ;;
-                    662679) PROJ_NAME="Ghia" ;;
-                    639789) PROJ_NAME="Syng" ;;
-                    590606) PROJ_NAME="Tartine" ;;
-                  esac
-                  H=$(( (M + 59) / 60 ))
-                  printf '  - %s · %sm · %s\n' "$D" "$M" "$DESC" >> "/tmp/noko-logs/$P.txt"
-                  OLD_H=${PROJ_HOURS[$P]:-0}
-                  PROJ_HOURS[$P]=$((OLD_H + H))
-                fi
-              done <<< "$NOKO_PART"
-
-              # Build project summary table
-              if [ ${#PROJ_HOURS[@]} -gt 0 ]; then
-                SUM_FILE=$(mktemp)
-                printf '## Summary\n\n' > "$SUM_FILE"
-                printf '| Project | Hours |\n' >> "$SUM_FILE"
-                printf '|---------|-------|\n' >> "$SUM_FILE"
-                TOTAL_H=0
-                for P in "${!PROJ_HOURS[@]}"; do
-                  PROJ_NAME="Project $P"
-                  case "$P" in
-                    687237) PROJ_NAME="Bean" ;; 708823) PROJ_NAME="Third Eye" ;;
-                    716638) PROJ_NAME="Dear Freeda (TMV)" ;; 586501) PROJ_NAME="Dublab" ;;
-                    611157) PROJ_NAME="Salon 94" ;; 560046) PROJ_NAME="Jono Pandolfi" ;;
-                    607240) PROJ_NAME="Farm To People" ;; 557928) PROJ_NAME="Culinistas" ;;
-                    595328) PROJ_NAME="Minisocial" ;; 615238) PROJ_NAME="Tripoli Gallery" ;;
-                    606165) PROJ_NAME="Max Levai" ;; 662679) PROJ_NAME="Ghia" ;;
-                    639789) PROJ_NAME="Syng" ;; 590606) PROJ_NAME="Tartine" ;;
-                  esac
-                  printf '| %s | %sh |\n' "$PROJ_NAME" "${PROJ_HOURS[$P]}" >> "$SUM_FILE"
-                  TOTAL_H=$((TOTAL_H + PROJ_HOURS[$P]))
-                done
-                printf '| **Total** | **%sh** |\n' "$TOTAL_H" >> "$SUM_FILE"
-              fi
-
-              # Build day-by-day page content
-              PAGE_FILE="/tmp/wiki-pages/${PAGE}"
-              {
-                printf '# %s — %s\n\n' "${AUTHOR}" "${MONTH_LABEL}"
-                printf 'Period: %s → %s\n\n' "${SINCE}" "${UNTIL}"
-
-                if [ -n "$SUM_FILE" ]; then
-                  cat "$SUM_FILE"
-                  printf '\n'
-                fi
-
-                printf -- '---\n\n'
-
-                for PROJ_FILE in /tmp/noko-logs/*.txt; do
-                  [ -f "$PROJ_FILE" ] || continue
-                  P=$(basename "$PROJ_FILE" .txt)
-                  PROJ_NAME="Project $P"
-                  case "$P" in
-                    687237) PROJ_NAME="Bean" ;; 708823) PROJ_NAME="Third Eye" ;;
-                    716638) PROJ_NAME="Dear Freeda (TMV)" ;; 586501) PROJ_NAME="Dublab" ;;
-                    611157) PROJ_NAME="Salon 94" ;; 560046) PROJ_NAME="Jono Pandolfi" ;;
-                    607240) PROJ_NAME="Farm To People" ;; 557928) PROJ_NAME="Culinistas" ;;
-                    595328) PROJ_NAME="Minisocial" ;; 615238) PROJ_NAME="Tripoli Gallery" ;;
-                    606165) PROJ_NAME="Max Levai" ;; 662679) PROJ_NAME="Ghia" ;;
-                    639789) PROJ_NAME="Syng" ;; 590606) PROJ_NAME="Tartine" ;;
-                  esac
-                  printf '## %s\n\n' "$PROJ_NAME"
-                  cat "$PROJ_FILE"
-                  printf '\n'
-                done
-
-                printf -- '---\n'
-                printf '_Generated by [wrklogr](%s) on %s_\n' "${REPO_URL}" "${NOW_UTC}"
-              } > "$PAGE_FILE"
-
-              [ -n "$SUM_FILE" ] && rm -f "$SUM_FILE"
-              rm -rf /tmp/noko-logs
-            done
-          fi
-
-          echo "${MONTH_LABEL}" > /tmp/wrklogr-month.txt
-          echo "${SINCE}" > /tmp/wrklogr-since.txt
-          echo "${UNTIL}" > /tmp/wrklogr-until.txt
-          echo "${AUTHORS}" > /tmp/wrklogr-authors.txt
+          /tmp/wrklogr generate-wiki \
+            --config /tmp/wrklogr.toml \
+            --orgs ${ORGS} \
+            --authors ${AUTHORS} \
+            --since "${SINCE}" --until "${UNTIL}" \
+            --output /tmp/wiki-pages \
+            --noko-dry-run \
+            --llm-summarize \
+            ${FLAGS}
 
       - name: Push sessions to Noko
         if: inputs.push-noko == 'true'
@@ -301,6 +168,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
+          GCAL_FLAG=""
+          if [ "${{ inputs.gcal }}" = "true" ] && [ -n "${{ vars.GCAL_CALENDAR }}" ]; then
+            GCAL_FLAG="--gcal"
+          fi
+
           /tmp/wrklogr report \
             --config /tmp/wrklogr.toml \
             --since "${{ steps.month.outputs.since }}" \
@@ -308,31 +180,27 @@ jobs:
             --local=false \
             --author "${{ github.actor }}" \
             --push-noko \
-            ${GCAL_FLAG} \
-            ${REPOS_FLAG}
+            ${GCAL_FLAG}
 
       - name: Push to wiki
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          MONTH_LABEL=$(cat /tmp/wrklogr-month.txt)
-          AUTHORS=$(cat /tmp/wrklogr-authors.txt)
+          MONTH_LABEL=$(cat /tmp/wiki-pages/.month_label || echo "${{ steps.month.outputs.month_label }}")
+          AUTHORS=$(cat /tmp/wiki-pages/.authors || echo "${{ steps.authors.outputs.authors }}")
           OWNER="${{ github.repository_owner }}"
           REPO="${GITHUB_REPOSITORY#*/}"
 
-          # Shallow clone the wiki repo using the token
           git clone \
             "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/${REPO}.wiki.git" \
-            /tmp/wiki \
-            --depth 1
+            /tmp/wiki --depth 1
 
           cd /tmp/wiki
 
           git config user.name  "wrklogr-bot"
           git config user.email "wrklogr-bot@users.noreply.github.com"
 
-          # Remove old per-month and stale top-level author pages
           git rm -f worklog-*.md 2>/dev/null || true
           for F in *.md; do
             case "$F" in
@@ -341,12 +209,10 @@ jobs:
             esac
           done
 
-          # Remove old month directories from previous runs
           for D in [0-9][0-9][0-9][0-9]-[0-9][0-9] [0-9][0-9]-[0-9][0-9][0-9][0-9]; do
             [ -d "$D" ] && git rm -rf "$D" 2>/dev/null || true
           done
 
-          # Create month directory and copy author pages
           mkdir -p "${MONTH_LABEL}"
           for AUTHOR in ${AUTHORS}; do
             SRC="/tmp/wiki-pages/${MONTH_LABEL}/${AUTHOR}.md"
@@ -356,7 +222,6 @@ jobs:
             fi
           done
 
-          # Build index page with links to all authors for this month
           {
             printf '# Worklogs\n\n'
             printf 'Monthly reports generated by [wrklogr](https://github.com/%s/%s).\n' "${OWNER}" "${REPO}"
@@ -368,7 +233,6 @@ jobs:
           } > Worklogs.md
           git add Worklogs.md
 
-          # Build sidebar with links to all month directories and their authors
           {
             printf '[Home](./Home)\n\n'
             for D in [0-9][0-9]-[0-9][0-9][0-9][0-9]; do

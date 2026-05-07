@@ -1,0 +1,360 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/bean-la/wrklogr/internal/config"
+	ghclient "github.com/bean-la/wrklogr/internal/github"
+	"github.com/bean-la/wrklogr/internal/session"
+	"github.com/spf13/cobra"
+)
+
+func newGenerateWikiCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Command {
+	var orgsInput []string
+	var authorsInput []string
+	var sinceInput string
+	var untilInput string
+	var outputDir string
+	var showCommits bool
+	var llmSummarize bool
+	var nokoDryRun bool
+	var gcalFlag bool
+	var token string
+
+	cmd := &cobra.Command{
+		Use:   "generate-wiki",
+		Short: "Generate monthly wiki pages from org-based repo discovery",
+		Long: `Discover repos from GitHub orgs, fetch commits for each author, run
+noko dry-run, and generate per-author wiki pages with project summaries.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := getConfig()
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if cfg == nil {
+				cfg = &config.RuntimeConfig{
+					SessionGap: 2 * time.Hour,
+					Timezone:   time.UTC,
+				}
+			}
+
+			since, err := parseDateBound(sinceInput, false)
+			if err != nil {
+				return fmt.Errorf("parse --since: %w", err)
+			}
+			until, err := parseDateBound(untilInput, true)
+			if err != nil {
+				return fmt.Errorf("parse --until: %w", err)
+			}
+
+			if since == nil || until == nil {
+				return fmt.Errorf("--since and --until are required")
+			}
+
+			authToken := resolveToken(token)
+
+			// Discover repos from orgs
+			repos, err := discoverReposFromOrgs(context.Background(), authToken, orgsInput)
+			if err != nil {
+				return fmt.Errorf("discover repos from orgs: %w", err)
+			}
+			if len(repos) == 0 {
+				return fmt.Errorf("no repos found in orgs %v", orgsInput)
+			}
+
+			// Filter repos: only include those with commits from tracked authors
+			repos = filterReposByAuthors(context.Background(), authToken, repos, authorsInput, since, until)
+			if len(repos) == 0 {
+				return fmt.Errorf("no repos with commits from authors %v in range", authorsInput)
+			}
+
+			sessionGap := cfg.SessionGap
+			reportTZ := cfg.Timezone
+			nokoCfg := cfg.Noko
+			llmCfg := resolveLLMConfig(cfg, "", "")
+			gcalCal := ""
+			if cfg.GCal != nil {
+				gcalCal = cfg.GCal.Calendar
+			}
+
+			if outputDir == "" {
+				outputDir = "/tmp/wiki-pages"
+			}
+
+			sinceFmt := since.Format("2006-01-02")
+			monthLabel := since.Format("2006-01")
+			untilFmt := until.Format("2006-01-02")
+
+			nowUTC := time.Now().UTC().Format("2006-01-02 15:04 UTC")
+
+			if err := os.MkdirAll(filepath.Join(outputDir, monthLabel), 0755); err != nil {
+				return fmt.Errorf("create output dir: %w", err)
+			}
+
+			for _, author := range authorsInput {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n─── %s ───\n", author)
+
+				opts := reportOpts{
+					Repos:         repos,
+					Since:         since,
+					Until:         until,
+					Author:        author,
+					SessionGap:    sessionGap,
+					Timezone:      reportTZ,
+					GCalFlag:      gcalFlag,
+					GCalCalendar:  gcalCal,
+					NokoDryRun:    nokoDryRun,
+					NokoConfig:    nokoCfg,
+					LLMSummarize:  llmSummarize,
+					LLMConfig:     &llmCfg,
+					GitHubToken:   authToken,
+					MinLogMinutes: nokoMinLog(nokoCfg),
+				}
+
+				result, runErr := runReport(context.Background(), cmd.OutOrStdout(), opts)
+				if runErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "report for %s: %v\n", author, runErr)
+					continue
+				}
+
+				// Build per-project daily logs and hours
+				type projectData struct {
+					hours int
+					lines []string
+				}
+				projects := make(map[int]*projectData)
+
+				for _, entry := range result.NokoEntries {
+					pd, ok := projects[entry.ProjectID]
+					if !ok {
+						pd = &projectData{}
+						projects[entry.ProjectID] = pd
+					}
+					hours := (entry.Minutes + 59) / 60
+					pd.hours += hours
+					pd.lines = append(pd.lines, fmt.Sprintf("  - %s · %dm · %s", entry.Date, entry.Minutes, entry.Description))
+				}
+
+				// Build wiki page
+				var sb strings.Builder
+
+				sb.WriteString(fmt.Sprintf("# %s — %s\n\n", author, monthLabel))
+				sb.WriteString(fmt.Sprintf("Period: %s → %s\n\n", sinceFmt, untilFmt))
+
+				// Build sorted project IDs once, used for both summary + per-project sections
+				ids := make([]int, 0, len(projects))
+				for id := range projects {
+					ids = append(ids, id)
+				}
+				sort.Ints(ids)
+
+				// Project summary table
+				if len(projects) > 0 {
+					sb.WriteString("## Summary\n\n")
+					sb.WriteString("| Project | Hours |\n")
+					sb.WriteString("|---------|-------|\n")
+					totalHours := 0
+					for _, id := range ids {
+						pd := projects[id]
+						name := projectName(id)
+						sb.WriteString(fmt.Sprintf("| %s | %dh |\n", name, pd.hours))
+						totalHours += pd.hours
+					}
+					sb.WriteString(fmt.Sprintf("| **Total** | **%dh** |\n", totalHours))
+					sb.WriteString("\n---\n\n")
+				}
+
+				// Day-by-day commit sessions (from days, skipping calendar-only sessions)
+				for _, day := range result.Days {
+					hasWork := false
+					for _, sess := range day.Sessions {
+						if isCalendarSession(sess) {
+							continue
+						}
+						hasWork = true
+						break
+					}
+					if !hasWork {
+						continue
+					}
+					sb.WriteString(fmt.Sprintf("## %s · %dh\n\n", day.Day, day.TotalHours))
+					for _, sess := range day.Sessions {
+						repos := getUniqueReposForSession(sess)
+						sb.WriteString(fmt.Sprintf("- %dh [%s]", sess.FuzzyHours, strings.Join(repos, ", ")))
+						if showCommits {
+							sb.WriteString("\n")
+							for _, c := range sess.Commits {
+								msg := strings.SplitN(c.Message, "\n", 2)[0]
+								if len(msg) > 60 {
+									msg = msg[:60] + "..."
+								}
+								sha := ""
+								if len(c.SHA) >= 8 {
+									sha = c.SHA[:8]
+								}
+								sb.WriteString(fmt.Sprintf("  - %s %s\n", sha, msg))
+							}
+						} else {
+							sb.WriteString("\n")
+						}
+					}
+					sb.WriteString("\n")
+				}
+
+				// Per-project daily noko entries
+				if len(projects) > 0 {
+					for _, id := range ids {
+						pd := projects[id]
+						sb.WriteString(fmt.Sprintf("## %s\n\n", projectName(id)))
+						for _, line := range pd.lines {
+							sb.WriteString(line + "\n")
+						}
+						sb.WriteString("\n")
+					}
+				}
+
+				sb.WriteString("---\n")
+				sb.WriteString(fmt.Sprintf("_Generated by wrklogr on %s_\n", nowUTC))
+
+				pageFile := filepath.Join(outputDir, monthLabel, author+".md")
+				if err := os.WriteFile(pageFile, []byte(sb.String()), 0644); err != nil {
+					return fmt.Errorf("write page %s: %w", pageFile, err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", pageFile)
+			}
+
+			// Write metadata files
+			os.WriteFile(filepath.Join(outputDir, ".month_label"), []byte(monthLabel), 0644)
+			os.WriteFile(filepath.Join(outputDir, ".since"), []byte(sinceFmt), 0644)
+			os.WriteFile(filepath.Join(outputDir, ".until"), []byte(untilFmt), 0644)
+			os.WriteFile(filepath.Join(outputDir, ".authors"), []byte(strings.Join(authorsInput, " ")), 0644)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&orgsInput, "orgs", nil, "GitHub orgs to scan for repos")
+	cmd.Flags().StringSliceVar(&authorsInput, "authors", nil, "GitHub logins to track")
+	cmd.Flags().StringVar(&sinceInput, "since", "", "Start date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&untilInput, "until", "", "End date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&outputDir, "output", "", "Output directory for wiki pages (default /tmp/wiki-pages)")
+	cmd.Flags().BoolVar(&showCommits, "show-commits", false, "Show individual commits")
+	cmd.Flags().BoolVar(&llmSummarize, "llm-summarize", false, "Use LLM to summarize sessions")
+	cmd.Flags().BoolVar(&nokoDryRun, "noko-dry-run", false, "Include Noko dry-run entries")
+	cmd.Flags().BoolVar(&gcalFlag, "gcal", false, "Include Google Calendar events")
+	cmd.Flags().StringVar(&token, "token", "", "GitHub token")
+
+	return cmd
+}
+
+func discoverReposFromOrgs(ctx context.Context, token string, orgs []string) ([]string, error) {
+	client := ghclient.NewClient(token, nil)
+	seen := make(map[string]struct{})
+	var repos []string
+
+	for _, org := range orgs {
+		orgRepos, err := client.ListOrgRepos(ctx, org)
+		if err != nil {
+			return nil, fmt.Errorf("org %s: %w", org, err)
+		}
+		for _, r := range orgRepos {
+			if _, ok := seen[r]; !ok {
+				seen[r] = struct{}{}
+				repos = append(repos, r)
+			}
+		}
+	}
+	sort.Strings(repos)
+	return repos, nil
+}
+
+func filterReposByAuthors(ctx context.Context, token string, repos, authors []string, since, until *time.Time) []string {
+	client := ghclient.NewClient(token, nil)
+	var filtered []string
+
+	for _, fullRepo := range repos {
+		owner, repoName, err := splitRepo(fullRepo)
+		if err != nil {
+			continue
+		}
+		for _, author := range authors {
+			match, err := client.HasCommitsByAuthor(ctx, owner, repoName, author, since, until)
+			if err != nil {
+				continue
+			}
+			if match != nil {
+				filtered = append(filtered, fullRepo)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func nokoMinLog(nc *config.NokoConfig) int {
+	if nc == nil {
+		return 0
+	}
+	return nc.MinLogMinutes
+}
+
+func projectName(id int) string {
+	switch id {
+	case 687237:
+		return "Bean"
+	case 708823:
+		return "Third Eye"
+	case 716638:
+		return "Dear Freeda (TMV)"
+	case 586501:
+		return "Dublab"
+	case 611157:
+		return "Salon 94"
+	case 560046:
+		return "Jono Pandolfi"
+	case 607240:
+		return "Farm To People"
+	case 557928:
+		return "Culinistas"
+	case 595328:
+		return "Minisocial"
+	case 615238:
+		return "Tripoli Gallery"
+	case 606165:
+		return "Max Levai"
+	case 662679:
+		return "Ghia"
+	case 639789:
+		return "Syng"
+	case 590606:
+		return "Tartine"
+	default:
+		return fmt.Sprintf("Project %d", id)
+	}
+}
+
+func isCalendarSession(s session.Session) bool {
+	if len(s.Commits) == 0 {
+		return false
+	}
+	return strings.HasPrefix(s.Commits[0].Repo, "📅 ")
+}
+
+func resolveToken(flagToken string) string {
+	if flagToken != "" {
+		return flagToken
+	}
+	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
+		return t
+	}
+	if t := os.Getenv("GH_TOKEN"); t != "" {
+		return t
+	}
+	return ""
+}

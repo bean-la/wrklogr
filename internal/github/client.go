@@ -68,6 +68,59 @@ func (c *Client) GetViewerIdentity(ctx context.Context) (*ViewerIdentity, error)
 	}, nil
 }
 
+// ListOrgRepos returns all repository full names (owner/repo) for an org.
+func (c *Client) ListOrgRepos(ctx context.Context, org string) ([]string, error) {
+	var all []string
+	opts := &gh.RepositoryListByOrgOptions{
+		Type:        "all",
+		ListOptions: gh.ListOptions{PerPage: 100},
+	}
+	for {
+		repos, resp, err := c.api.Repositories.ListByOrg(ctx, org, opts)
+		if err != nil {
+			return nil, fmt.Errorf("list repos for org %s: %w", org, err)
+		}
+		for _, r := range repos {
+			if r.GetFullName() != "" {
+				all = append(all, r.GetFullName())
+			}
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return all, nil
+}
+
+// HasCommitsByAuthor checks if a repo has at least one commit from an author
+// in the given time range. Returns the first matching commit or nil.
+func (c *Client) HasCommitsByAuthor(
+	ctx context.Context,
+	owner, repo string,
+	author string,
+	since, until *time.Time,
+) (*gh.RepositoryCommit, error) {
+	opts := &gh.CommitsListOptions{
+		Author:      author,
+		ListOptions: gh.ListOptions{PerPage: 1},
+	}
+	if since != nil {
+		opts.Since = *since
+	}
+	if until != nil {
+		opts.Until = *until
+	}
+	commits, _, err := c.api.Repositories.ListCommits(ctx, owner, repo, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(commits) > 0 {
+		return commits[0], nil
+	}
+	return nil, nil
+}
+
 // ListCommits fetches commits for owner/repo and follows pagination.
 func (c *Client) ListCommits(
 	ctx context.Context,
