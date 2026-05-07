@@ -377,11 +377,11 @@ jobs:
               for F in "$D"/*.md; do
                 [ -f "$F" ] || continue
                 NAME=$(basename "$F" .md)
-                printf -- '- [%s](./%s)\n' "$NAME" "${F%.md}"
+                printf -- '- [[%s/%s|%s]]\n' "$D" "$NAME" "$NAME"
               done
               printf '\n'
             done
-            printf '[Worklogs](./Worklogs)\n'
+            printf '[[Worklogs]]\n'
           } > _Sidebar.md
           git add _Sidebar.md
 
