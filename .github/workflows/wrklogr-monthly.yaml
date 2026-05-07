@@ -224,16 +224,6 @@ jobs:
           cd /tmp/wiki
 
           git rm -f worklog-*.md 2>/dev/null || true
-          for F in *.md; do
-            case "$F" in
-              Home.md|Worklogs.md|_Sidebar.md) ;;
-              *) git rm -f "$F" 2>/dev/null || true ;;
-            esac
-          done
-
-          for D in [0-9][0-9][0-9][0-9]-[0-9][0-9] [0-9][0-9]-[0-9][0-9][0-9][0-9]; do
-            [ -d "$D" ] && git rm -rf "$D" 2>/dev/null || true
-          done
 
           mkdir -p "${MONTH_LABEL}"
           for AUTHOR in ${AUTHORS}; do
