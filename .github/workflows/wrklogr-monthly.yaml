@@ -136,7 +136,8 @@ jobs:
           "futurerootsinc/dublab-wp" = { project_id = 586501 }
 
           [llm]
-          model = "gpt-4o-mini"
+          model = "deepseek-chat"
+          base_url = "https://api.deepseek.com/v1"
 
           [gcal]
           calendar = "${{ vars.GCAL_CALENDAR }}"
