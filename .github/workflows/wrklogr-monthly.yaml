@@ -179,16 +179,10 @@ jobs:
               PAGE="${MONTH_LABEL}/${AUTHOR}.md"
 
               # Run report with show-commits + noko-dry-run to get everything
-              /tmp/wrklogr report \
+              COMBINED=$(/tmp/wrklogr report \
                 --config /tmp/wrklogr.toml \
                 --since "${SINCE}" --until "${UNTIL}" --local=false \
-                --author "${AUTHOR}" ${REPOS_FLAG} ${SHOW_COMMITS_FLAG} ${GCAL_FLAG} --llm-summarize --noko-dry-run \
-                > /tmp/combined.txt 2>&1 || true
-              COMBINED=$(cat /tmp/combined.txt)
-
-              echo "::group::LLM debug for ${AUTHOR}"
-              grep -i "llm\|error\|failed" /tmp/combined.txt || echo "(no LLM errors found)"
-              echo "::endgroup::"
+                --author "${AUTHOR}" ${REPOS_FLAG} ${SHOW_COMMITS_FLAG} ${GCAL_FLAG} --llm-summarize --noko-dry-run 2>&1 || true)
 
               # Split on noko separator
               if echo "$COMBINED" | grep -q "Noko dry run"; then

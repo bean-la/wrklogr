@@ -1,3 +1,4 @@
 /wrklogr
 /wrklogr.toml
 reports/
+.env
