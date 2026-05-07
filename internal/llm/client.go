@@ -72,7 +72,7 @@ func (c *Client) Summarize(commits []string) (string, error) {
 	req := chatRequest{
 		Model: c.model,
 		Messages: []message{
-			{Role: "system", Content: "You summarize work sessions from git commits. Write 1-2 concise sentences about what was accomplished. Focus on outcomes, not implementation details. Do not list individual commits."},
+			{Role: "system", Content: "You summarize work sessions from git commits. Write 1-2 concise sentences about what was accomplished. Focus on outcomes, not implementation details. Do not start with phrases like 'The session focused on' or 'The work session'. Start directly with what was done. Do not list individual commits."},
 			{Role: "user", Content: prompt},
 		},
 		MaxTokens: 150,
