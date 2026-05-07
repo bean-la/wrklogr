@@ -126,10 +126,10 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 			days := session.BucketByDay(sessions, reportTZ)
 
 			// --- Fetch GCal events ---
-			gcalCal := "seb@bean.la"
-			if cfg.GCal != nil && cfg.GCal.Calendar != "" {
-				gcalCal = cfg.GCal.Calendar
-			}
+\t\t\tvar gcalCal string
+\t\t\tif cfg.GCal != nil {
+\t\t\t\tgcalCal = cfg.GCal.Calendar
+\t\t\t}
 			events, err := gcal.FetchEvents(gcalCal, *since, *until)
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "calendar: error — %v\n", err)
@@ -379,27 +379,13 @@ type projectOption struct {
 func listProjectOptions(nc *config.NokoConfig) []projectOption {
 	ids := make(map[int]string)
 
-	// Collect from per-repo mappings
-	if nc.RepoProjects != nil {
-		for _, rp := range nc.RepoProjects {
-			ids[rp.ProjectID] = ""
-		}
-	}
-
-	ids[687237] = "Bean"
-	ids[708823] = "Third Eye"
-	ids[716638] = "Dear Freeda (TMV)"
-	ids[586501] = "Dublab"
-	ids[611157] = "Salon 94"
-	ids[560046] = "Jono Pandolfi"
-	ids[607240] = "Farm To People"
-	ids[557928] = "Culinistas"
-	ids[595328] = "Minisocial"
-	ids[615238] = "Tripoli Gallery"
-	ids[606165] = "Max Levai"
-	ids[662679] = "Ghia"
-	ids[639789] = "Syng"
-	ids[590606] = "Tartine"
+\t// Collect from per-repo mappings
+\tif nc.RepoProjects != nil {
+\t\tfor _, rp := range nc.RepoProjects {
+\t\t\tids[rp.ProjectID] = ""
+\t\t}
+\t}
+\t// (no hardcoded default projects — config comes from wrklogr.toml)
 
 	opts := make([]projectOption, 0, len(ids))
 	for id, name := range ids {

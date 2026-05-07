@@ -71,14 +71,13 @@ timezone = "America/New_York"
 [noko]
 # api_token = "your-noko-token"  # or set NOKO_TOKEN env var
 
-# Per-repo Noko project mapping
+# Per-repo Noko project mapping (example — use your own project IDs)
 [noko.projects]
-"bean-la/slyce-studio" = { project_id = 687237 }
-"Third-Eye-Tarot/rainbow-mono" = { project_id = 708823 }
+"your-org/your-repo" = { project_id = 123456 }
 
 # Google Calendar integration (reads public iCal feed)
 [gcal]
-calendar = "seb@bean.la"
+calendar = "your@email.com"
 ```
 
 ## Usage
