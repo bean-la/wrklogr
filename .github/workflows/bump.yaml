@@ -1,0 +1,43 @@
+# bump.yaml
+# Auto-bumps the patch version when code in cmd/, internal/, or go.mod changes on main.
+# The resulting tag push triggers release.yaml to build and publish.
+
+name: Bump
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - cmd/wrklogr/**
+      - internal/**
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version
+        run: |
+          LATEST=$(git tag -l 'v*' | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.1.0"
+          else
+            MAJOR=$(echo "${LATEST#v}" | cut -d. -f1)
+            MINOR=$(echo "${LATEST#v}" | cut -d. -f2)
+            PATCH=$(echo "${LATEST#v}" | cut -d. -f3)
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "bumping ${LATEST} → ${NEXT}"
+          git config user.name  "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "${NEXT}"
+          git push origin "${NEXT}"

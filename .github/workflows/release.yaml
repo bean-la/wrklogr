@@ -1,17 +1,7 @@
 # release.yaml
-# Auto-bumps the patch version on pushes to main, then builds and creates a
-# GitHub Release from the resulting tag.  The tag push triggers a second run
-# that compiles binaries for every supported platform and attaches them.
+# Builds binaries and uploads to a GitHub Release whenever a v* tag is pushed.
 #
-# Consumers can then download the binary for their platform without Go:
-#
-#   # Linux x86-64
-#   curl -sL https://github.com/bean-la/wrklogr/releases/latest/download/wrklogr-linux-amd64 -o /tmp/wrklogr
-#   chmod +x /tmp/wrklogr
-#
-#   # macOS arm64 (Apple Silicon)
-#   curl -sL https://github.com/bean-la/wrklogr/releases/latest/download/wrklogr-darwin-arm64 -o /tmp/wrklogr
-#   chmod +x /tmp/wrklogr
+# Tag creation is handled by bump.yaml (auto-bumps patch on main pushes).
 
 name: Release
 
@@ -19,45 +9,12 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - main
-    paths:
-      - cmd/wrklogr/**
-      - internal/**
-      - go.mod
-      - go.sum
 
 permissions:
   contents: write
 
 jobs:
-  bump:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Bump patch version
-        run: |
-          LATEST=$(git tag -l 'v*' | sort -V | tail -1)
-          if [ -z "$LATEST" ]; then
-            NEXT="v0.1.0"
-          else
-            MAJOR=$(echo "${LATEST#v}" | cut -d. -f1)
-            MINOR=$(echo "${LATEST#v}" | cut -d. -f2)
-            PATCH=$(echo "${LATEST#v}" | cut -d. -f3)
-            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-          fi
-          echo "bumping ${LATEST}→ ${NEXT}"
-          git config user.name  "github-actions"
-          git config user.email "github-actions@github.com"
-          git tag "${NEXT}"
-          git push origin "${NEXT}"
-
   build:
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     strategy:
       matrix:
