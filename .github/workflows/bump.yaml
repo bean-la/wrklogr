@@ -26,6 +26,8 @@ jobs:
           fetch-depth: 0
 
       - name: Bump patch version
+        env:
+          GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           LATEST=$(git tag -l 'v*' | sort -V | tail -1)
           if [ -z "$LATEST" ]; then
