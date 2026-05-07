@@ -377,7 +377,7 @@ jobs:
               for F in "$D"/*.md; do
                 [ -f "$F" ] || continue
                 NAME=$(basename "$F" .md)
-                printf -- '- [%s](./%s)\n' "$NAME" "$F"
+                printf -- '- [%s](./%s)\n' "$NAME" "${F%.md}"
               done
               printf '\n'
             done
