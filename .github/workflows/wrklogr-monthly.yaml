@@ -336,7 +336,7 @@ jobs:
           git rm -f worklog-*.md 2>/dev/null || true
           for F in *.md; do
             case "$F" in
-              Home.md|Worklogs.md) ;;
+              Home.md|Worklogs.md|_Sidebar.md) ;;
               *) git rm -f "$F" 2>/dev/null || true ;;
             esac
           done
@@ -367,6 +367,23 @@ jobs:
             printf '\n'
           } > Worklogs.md
           git add Worklogs.md
+
+          # Build sidebar with links to all month directories and their authors
+          {
+            printf '[Home](./Home)\n\n'
+            for D in [0-9][0-9]-[0-9][0-9][0-9][0-9]; do
+              [ -d "$D" ] || continue
+              printf '### %s\n' "$D"
+              for F in "$D"/*.md; do
+                [ -f "$F" ] || continue
+                NAME=$(basename "$F" .md)
+                printf -- '- [%s](./%s)\n' "$NAME" "$F"
+              done
+              printf '\n'
+            done
+            printf '[Worklogs](./Worklogs)\n'
+          } > _Sidebar.md
+          git add _Sidebar.md
 
           git commit -m "Update worklog reports for ${MONTH_LABEL}" || true
           git push
