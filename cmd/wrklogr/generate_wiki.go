@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -22,6 +23,7 @@ func newGenerateWikiCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.
 	var sinceInput string
 	var untilInput string
 	var outputDir string
+	var cacheDir string
 	var showCommits bool
 	var llmSummarize bool
 	var nokoDryRun bool
@@ -58,102 +60,184 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 				return fmt.Errorf("--since and --until are required")
 			}
 
-			authToken := resolveToken(token)
-
-			// Discover repos from orgs
-			repos, err := discoverReposFromOrgs(context.Background(), authToken, orgsInput)
-			if err != nil {
-				return fmt.Errorf("discover repos from orgs: %w", err)
-			}
-			if len(repos) == 0 {
-				return fmt.Errorf("no repos found in orgs %v", orgsInput)
-			}
-
-			// Filter repos: only include those with commits from tracked authors
-			repos = filterReposByAuthors(context.Background(), authToken, repos, authorsInput, since, until)
-			if len(repos) == 0 {
-				return fmt.Errorf("no repos with commits from authors %v in range", authorsInput)
-			}
-
-			sessionGap := cfg.SessionGap
-			reportTZ := cfg.Timezone
-			nokoCfg := cfg.Noko
-			llmCfg := resolveLLMConfig(cfg, "", "")
-			gcalCal := ""
-			if cfg.GCal != nil {
-				gcalCal = cfg.GCal.Calendar
-			}
+			sinceFmt := since.Format("2006-01-02")
+			monthLabel := since.Format("2006-01")
+			untilFmt := until.Format("2006-01-02")
+			nowUTC := time.Now().UTC().Format("2006-01-02 15:04 UTC")
 
 			if outputDir == "" {
 				outputDir = "/tmp/wiki-pages"
 			}
 
-			sinceFmt := since.Format("2006-01-02")
-			monthLabel := since.Format("2006-01")
-			untilFmt := until.Format("2006-01-02")
-
-			nowUTC := time.Now().UTC().Format("2006-01-02 15:04 UTC")
-
 			if err := os.MkdirAll(filepath.Join(outputDir, monthLabel), 0755); err != nil {
 				return fmt.Errorf("create output dir: %w", err)
 			}
 
-			for _, author := range authorsInput {
-				fmt.Fprintf(cmd.OutOrStdout(), "\n─── %s ───\n", author)
-
-				opts := reportOpts{
-					Repos:         repos,
-					Since:         since,
-					Until:         until,
-					Author:        author,
-					SessionGap:    sessionGap,
-					Timezone:      reportTZ,
-					GCalFlag:      gcalFlag,
-					GCalCalendar:  gcalCal,
-					NokoDryRun:    nokoDryRun,
-					NokoConfig:    nokoCfg,
-					LLMSummarize:  llmSummarize,
-					LLMConfig:     &llmCfg,
-					GitHubToken:   authToken,
-					MinLogMinutes: nokoMinLog(nokoCfg),
-				}
-
-				result, runErr := runReport(context.Background(), cmd.OutOrStdout(), opts)
-				if runErr != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "report for %s: %v\n", author, runErr)
-					continue
-				}
-
-				// Build per-project daily logs and hours
-				type projectData struct {
-					hours int
-					lines []string
-				}
-				projects := make(map[int]*projectData)
-
-				for _, entry := range result.NokoEntries {
-					pd, ok := projects[entry.ProjectID]
-					if !ok {
-						pd = &projectData{}
-						projects[entry.ProjectID] = pd
+			// Try to load a cache file for this month
+			var cacheLoaded *cacheFile
+			if cacheDir != "" {
+				cachePath := filepath.Join(cacheDir, monthLabel+".json")
+				if data, err := os.ReadFile(cachePath); err == nil {
+					var cf cacheFile
+					if json.Unmarshal(data, &cf) == nil {
+						cacheLoaded = &cf
+						fmt.Fprintf(cmd.OutOrStdout(), "loaded cache: %d days, %d noko entries\n", len(cf.Days), len(cf.NokoEntries))
 					}
-					hours := (entry.Minutes + 59) / 60
-					pd.hours += hours
-					pd.lines = append(pd.lines, fmt.Sprintf("  - %s · %dm · %s", entry.Date, entry.Minutes, entry.Description))
+				}
+			}
+
+			cacheCoversRange := false
+			if cacheLoaded != nil {
+				cacheEnd := ""
+				for _, d := range cacheLoaded.Days {
+					if d.Day > cacheEnd {
+						cacheEnd = d.Day
+					}
+				}
+				if cacheEnd >= untilFmt {
+					cacheCoversRange = true
+				}
+			}
+
+			var allDays []session.DaySummary
+			var allNoko []nokoEntry
+
+			if cacheCoversRange && len(cacheLoaded.NokoEntries) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "cache covers full range, skipping API calls\n")
+				allNoko = make([]nokoEntry, len(cacheLoaded.NokoEntries))
+				for i, e := range cacheLoaded.NokoEntries {
+					allNoko[i] = nokoEntry{
+						Date: e.Date, Minutes: e.Minutes, ProjectID: e.ProjectID, Description: e.Description,
+					}
+				}
+				dayMap := make(map[string]*session.DaySummary)
+				for _, cd := range cacheLoaded.Days {
+					ds := &session.DaySummary{Day: cd.Day, TotalHours: cd.Hours}
+					for _, cs := range cd.Sessions {
+						ds.Sessions = append(ds.Sessions, session.Session{
+							FuzzyHours: cs.Hours,
+							Commits:    []session.Commit{{Repo: strings.Join(cs.Repos, ", ")}},
+						})
+					}
+					if existing, ok := dayMap[cd.Day]; ok {
+						existing.TotalHours += ds.TotalHours
+						existing.Sessions = append(existing.Sessions, ds.Sessions...)
+					} else {
+						dayMap[cd.Day] = ds
+					}
+				}
+				var keys []string
+				for k := range dayMap {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					allDays = append(allDays, *dayMap[k])
+				}
+			} else {
+				authToken := resolveToken(token)
+
+				repos, err := discoverReposFromOrgs(context.Background(), authToken, orgsInput)
+				if err != nil {
+					return fmt.Errorf("discover repos from orgs: %w", err)
+				}
+				if len(repos) == 0 {
+					return fmt.Errorf("no repos found in orgs %v", orgsInput)
 				}
 
-				// Build wiki page
+				repos = filterReposByAuthors(context.Background(), authToken, repos, authorsInput, since, until)
+				if len(repos) == 0 {
+					return fmt.Errorf("no repos with commits from authors %v in range", authorsInput)
+				}
+
+				sessionGap := cfg.SessionGap
+				reportTZ := cfg.Timezone
+				nokoCfg := cfg.Noko
+				llmCfg := resolveLLMConfig(cfg, "", "")
+				gcalCal := ""
+				if cfg.GCal != nil {
+					gcalCal = cfg.GCal.Calendar
+				}
+
+				for _, author := range authorsInput {
+					fmt.Fprintf(cmd.OutOrStdout(), "\n─── %s ───\n", author)
+
+					opts := reportOpts{
+						Repos:         repos,
+						Since:         since,
+						Until:         until,
+						Author:        author,
+						SessionGap:    sessionGap,
+						Timezone:      reportTZ,
+						GCalFlag:      gcalFlag,
+						GCalCalendar:  gcalCal,
+						NokoDryRun:    nokoDryRun,
+						NokoConfig:    nokoCfg,
+						LLMSummarize:  llmSummarize,
+						LLMConfig:     &llmCfg,
+						GitHubToken:   authToken,
+						MinLogMinutes: nokoMinLog(nokoCfg),
+					}
+
+					result, runErr := runReport(context.Background(), cmd.OutOrStdout(), opts)
+					if runErr != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "report for %s: %v\n", author, runErr)
+						continue
+					}
+
+					allDays = append(allDays, result.Days...)
+					allNoko = append(allNoko, result.NokoEntries...)
+				}
+			}
+
+			// Build per-project daily logs and hours from noko entries
+			type projectData struct {
+				hours int
+				lines []string
+			}
+			projects := make(map[int]*projectData)
+
+			for _, entry := range allNoko {
+				pd, ok := projects[entry.ProjectID]
+				if !ok {
+					pd = &projectData{}
+					projects[entry.ProjectID] = pd
+				}
+				hours := (entry.Minutes + 59) / 60
+				pd.hours += hours
+				pd.lines = append(pd.lines, fmt.Sprintf("  - %s · %dm · %s", entry.Date, entry.Minutes, entry.Description))
+			}
+
+			ids := make([]int, 0, len(projects))
+			for id := range projects {
+				ids = append(ids, id)
+			}
+			sort.Ints(ids)
+
+			// Merge days by key
+			dayMap := make(map[string]*session.DaySummary)
+			for i := range allDays {
+				d := &allDays[i]
+				if existing, ok := dayMap[d.Day]; ok {
+					existing.TotalHours += d.TotalHours
+					existing.Sessions = append(existing.Sessions, d.Sessions...)
+				} else {
+					copy := *d
+					dayMap[d.Day] = &copy
+				}
+			}
+			var sortedDayKeys []string
+			for k := range dayMap {
+				sortedDayKeys = append(sortedDayKeys, k)
+			}
+			sort.Strings(sortedDayKeys)
+
+			// Build wiki pages per author
+			for _, author := range authorsInput {
 				var sb strings.Builder
 
 				sb.WriteString(fmt.Sprintf("# %s — %s\n\n", author, monthLabel))
 				sb.WriteString(fmt.Sprintf("Period: %s → %s\n\n", sinceFmt, untilFmt))
-
-				// Build sorted project IDs once, used for both summary + per-project sections
-				ids := make([]int, 0, len(projects))
-				for id := range projects {
-					ids = append(ids, id)
-				}
-				sort.Ints(ids)
 
 				// Project summary table
 				if len(projects) > 0 {
@@ -174,8 +258,9 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 					sb.WriteString("\n---\n\n")
 				}
 
-				// Day-by-day commit sessions (from days, skipping calendar-only sessions)
-				for _, day := range result.Days {
+				// Day-by-day commit sessions
+				for _, dayKey := range sortedDayKeys {
+					day := dayMap[dayKey]
 					hasWork := false
 					for _, sess := range day.Sessions {
 						if isCalendarSession(sess) {
@@ -191,7 +276,7 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 					for _, sess := range day.Sessions {
 						repos := getUniqueReposForSession(sess)
 						sb.WriteString(fmt.Sprintf("- %dh [%s]", sess.FuzzyHours, strings.Join(repos, ", ")))
-						if showCommits {
+						if showCommits && len(sess.Commits) > 0 {
 							sb.WriteString("\n")
 							for _, c := range sess.Commits {
 								msg := strings.SplitN(c.Message, "\n", 2)[0]
@@ -202,7 +287,9 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 								if len(c.SHA) >= 8 {
 									sha = c.SHA[:8]
 								}
-								sb.WriteString(fmt.Sprintf("  - %s %s\n", sha, msg))
+								if sha != "" {
+									sb.WriteString(fmt.Sprintf("  - %s %s\n", sha, msg))
+								}
 							}
 						} else {
 							sb.WriteString("\n")
@@ -233,6 +320,47 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 				fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", pageFile)
 			}
 
+			// Write updated cache
+			if cacheDir != "" {
+				if err := os.MkdirAll(cacheDir, 0755); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "create cache dir: %v\n", err)
+				} else {
+					var cd []cachedDay
+					for _, dayKey := range sortedDayKeys {
+						day := dayMap[dayKey]
+						d := cachedDay{Day: day.Day, Hours: day.TotalHours}
+						for _, s := range day.Sessions {
+							if isCalendarSession(s) {
+								continue
+							}
+							d.Sessions = append(d.Sessions, cachedSession{
+								Hours: s.FuzzyHours,
+								Repos: getUniqueReposForSession(s),
+							})
+						}
+						cd = append(cd, d)
+					}
+					var cn []cachedNokoEntry
+					for _, e := range allNoko {
+						cn = append(cn, cachedNokoEntry{
+							Date: e.Date, Minutes: e.Minutes, ProjectID: e.ProjectID, Description: e.Description,
+						})
+					}
+					cf := cacheFile{
+						Version: 1, Month: monthLabel, Since: sinceFmt, Until: untilFmt,
+						Updated: time.Now().UTC().Format(time.RFC3339), Authors: authorsInput,
+						Days: cd, NokoEntries: cn,
+					}
+					cachePath := filepath.Join(cacheDir, monthLabel+".json")
+					data, _ := json.MarshalIndent(cf, "", "  ")
+					if err := os.WriteFile(cachePath, data, 0644); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "write cache: %v\n", err)
+					} else {
+						fmt.Fprintf(cmd.OutOrStdout(), "wrote cache %s\n", cachePath)
+					}
+				}
+			}
+
 			// Write metadata files
 			os.WriteFile(filepath.Join(outputDir, ".month_label"), []byte(monthLabel), 0644)
 			os.WriteFile(filepath.Join(outputDir, ".since"), []byte(sinceFmt), 0644)
@@ -248,6 +376,7 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&untilInput, "until", "", "End date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&outputDir, "output", "", "Output directory for wiki pages (default /tmp/wiki-pages)")
+	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Cache directory for incremental runs (default: none)")
 	cmd.Flags().BoolVar(&showCommits, "show-commits", false, "Show individual commits")
 	cmd.Flags().BoolVar(&llmSummarize, "llm-summarize", false, "Use LLM to summarize sessions")
 	cmd.Flags().BoolVar(&nokoDryRun, "noko-dry-run", false, "Include Noko dry-run entries")

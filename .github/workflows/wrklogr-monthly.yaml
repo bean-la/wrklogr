@@ -134,6 +134,25 @@ jobs:
           calendar = "${{ vars.GCAL_CALENDAR }}"
           CONFIG
 
+      - name: Clone wiki (for cache)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          git clone \
+            "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/${REPO}.wiki.git" \
+            /tmp/wiki --depth 1
+          cd /tmp/wiki
+          git config user.name  "wrklogr-bot"
+          git config user.email "wrklogr-bot@users.noreply.github.com"
+          mkdir -p /tmp/wrklogr-cache
+          if [ -d _cache ]; then
+            cp -r _cache/* /tmp/wrklogr-cache/ 2>/dev/null || true
+            echo "restored cache from wiki"
+          fi
+
       - name: Generate wiki pages
         shell: bash
         env:
@@ -167,6 +186,7 @@ jobs:
             ${AUTHOR_FLAGS} \
             --since "${SINCE}" --until "${UNTIL}" \
             --output /tmp/wiki-pages \
+            --cache-dir /tmp/wrklogr-cache \
             --noko-dry-run \
             --llm-summarize \
             ${FLAGS}
@@ -196,19 +216,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WORKLOG_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          MONTH_LABEL=$(cat /tmp/wiki-pages/.month_label || echo "${{ steps.month.outputs.month_label }}")
-          AUTHORS=$(cat /tmp/wiki-pages/.authors || echo "${{ steps.authors.outputs.authors }}")
           OWNER="${{ github.repository_owner }}"
           REPO="${GITHUB_REPOSITORY#*/}"
-
-          git clone \
-            "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/${REPO}.wiki.git" \
-            /tmp/wiki --depth 1
+          MONTH_LABEL=$(cat /tmp/wiki-pages/.month_label || echo "${{ steps.month.outputs.month_label }}")
+          AUTHORS=$(cat /tmp/wiki-pages/.authors || echo "${{ steps.authors.outputs.authors }}")
 
           cd /tmp/wiki
-
-          git config user.name  "wrklogr-bot"
-          git config user.email "wrklogr-bot@users.noreply.github.com"
 
           git rm -f worklog-*.md 2>/dev/null || true
           for F in *.md; do
@@ -230,6 +243,11 @@ jobs:
               git add "${MONTH_LABEL}/${AUTHOR}.md"
             fi
           done
+
+          # Save updated cache back to wiki
+          rm -rf _cache
+          cp -r /tmp/wrklogr-cache _cache
+          git add _cache/
 
           {
             printf '# Worklogs\n\n'

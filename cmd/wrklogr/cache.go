@@ -13,24 +13,32 @@ import (
 )
 
 type cacheFile struct {
-	Version int           `json:"version"`
-	Month   string        `json:"month"`
-	Since   string        `json:"since"`
-	Until   string        `json:"until"`
-	Updated string        `json:"updated"`
-	Authors []string      `json:"authors"`
-	Days    []cachedDay   `json:"days"`
+	Version     int                `json:"version"`
+	Month       string             `json:"month"`
+	Since       string             `json:"since"`
+	Until       string             `json:"until"`
+	Updated     string             `json:"updated"`
+	Authors     []string           `json:"authors"`
+	Days        []cachedDay        `json:"days"`
+	NokoEntries []cachedNokoEntry  `json:"noko_entries"`
 }
 
 type cachedDay struct {
-	Day      string        `json:"day"`
-	Hours    int           `json:"hours"`
+	Day      string          `json:"day"`
+	Hours    int             `json:"hours"`
 	Sessions []cachedSession `json:"sessions"`
 }
 
 type cachedSession struct {
 	Hours int      `json:"hours"`
 	Repos []string `json:"repos"`
+}
+
+type cachedNokoEntry struct {
+	Date        string `json:"date"`
+	Minutes     int    `json:"minutes"`
+	ProjectID   int    `json:"project_id"`
+	Description string `json:"description"`
 }
 
 func newCacheCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Command {
@@ -101,6 +109,7 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 			}
 
 			var allDays []cachedDay
+			var allNoko []cachedNokoEntry
 			for _, author := range authorsInput {
 				opts := reportOpts{
 					Repos:         repos,
@@ -111,6 +120,7 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 					Timezone:      reportTZ,
 					GCalFlag:      gcalFlag,
 					GCalCalendar:  gcalCal,
+					NokoDryRun:    true,
 					NokoConfig:    nokoCfg,
 					LLMConfig:     &llmCfg,
 					GitHubToken:   authToken,
@@ -139,6 +149,15 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 					}
 					allDays = append(allDays, cd)
 				}
+
+				for _, entry := range result.NokoEntries {
+					allNoko = append(allNoko, cachedNokoEntry{
+						Date:        entry.Date,
+						Minutes:     entry.Minutes,
+						ProjectID:   entry.ProjectID,
+						Description: entry.Description,
+					})
+				}
 			}
 
 			// Merge days (multiple authors may contribute to same day)
@@ -159,13 +178,14 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 			}
 
 			cf := cacheFile{
-				Version: 1,
-				Month:   since.Format("2006-01"),
-				Since:   since.Format("2006-01-02"),
-				Until:   until.Format("2006-01-02"),
-				Updated: time.Now().UTC().Format(time.RFC3339),
-				Authors: authorsInput,
-				Days:    mergedDays,
+				Version:     1,
+				Month:       since.Format("2006-01"),
+				Since:       since.Format("2006-01-02"),
+				Until:       until.Format("2006-01-02"),
+				Updated:     time.Now().UTC().Format(time.RFC3339),
+				Authors:     authorsInput,
+				Days:        mergedDays,
+				NokoEntries: allNoko,
 			}
 
 			if err := os.MkdirAll(cacheDir, 0755); err != nil {
