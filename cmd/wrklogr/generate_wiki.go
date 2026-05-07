@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -157,16 +158,19 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 				// Project summary table
 				if len(projects) > 0 {
 					sb.WriteString("## Summary\n\n")
-					sb.WriteString("| Project | Hours |\n")
-					sb.WriteString("|---------|-------|\n")
+					sb.WriteString("| Project | Hours | Days |\n")
+					sb.WriteString("|---------|-------|------|\n")
 					totalHours := 0
+					totalDays := 0.0
 					for _, id := range ids {
 						pd := projects[id]
 						name := projectName(id)
-						sb.WriteString(fmt.Sprintf("| %s | %dh |\n", name, pd.hours))
+						days := roundQuarter(float64(pd.hours) / 8.0)
+						totalDays += days
+						sb.WriteString(fmt.Sprintf("| %s | %dh | %.2f |\n", name, pd.hours, days))
 						totalHours += pd.hours
 					}
-					sb.WriteString(fmt.Sprintf("| **Total** | **%dh** |\n", totalHours))
+					sb.WriteString(fmt.Sprintf("| **Total** | **%dh** | **%.2f** |\n", totalHours, totalDays))
 					sb.WriteString("\n---\n\n")
 				}
 
@@ -357,4 +361,8 @@ func resolveToken(flagToken string) string {
 		return t
 	}
 	return ""
+}
+
+func roundQuarter(d float64) float64 {
+	return math.Round(d*4) / 4
 }
