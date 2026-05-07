@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -249,7 +248,7 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 					for _, id := range ids {
 						pd := projects[id]
 						name := projectName(id)
-						days := roundQuarter(float64(pd.hours) / 8.0)
+						days := float64(pd.hours) / 8.0
 						totalDays += days
 						sb.WriteString(fmt.Sprintf("| %s | %dh | %.2f |\n", name, pd.hours, days))
 						totalHours += pd.hours
@@ -490,8 +489,4 @@ func resolveToken(flagToken string) string {
 		return t
 	}
 	return ""
-}
-
-func roundQuarter(d float64) float64 {
-	return math.Round(d*4) / 4
 }
