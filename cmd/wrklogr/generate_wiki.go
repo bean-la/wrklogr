@@ -141,14 +141,12 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 					return fmt.Errorf("discover repos from orgs: %w", err)
 				}
 				if len(repos) == 0 {
-					fmt.Fprintf(cmd.ErrOrStderr(), "no repos found in orgs %v\n", orgsInput)
-					return nil
+					return fmt.Errorf("no repos found in orgs %v", orgsInput)
 				}
 
 				repos = filterReposByAuthors(context.Background(), authToken, repos, authorsInput, since, until)
 				if len(repos) == 0 {
-					fmt.Fprintf(cmd.ErrOrStderr(), "no repos with commits from authors %v in range\n", authorsInput)
-					return nil
+					return fmt.Errorf("no repos with commits from authors %v in range", authorsInput)
 				}
 
 				sessionGap := cfg.SessionGap

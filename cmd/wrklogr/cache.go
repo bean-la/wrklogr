@@ -92,8 +92,7 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 
 			repos = filterReposByAuthors(context.Background(), authToken, repos, authorsInput, since, until)
 			if len(repos) == 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "no repos with commits from authors %v in range\n", authorsInput)
-				return nil
+				return fmt.Errorf("no repos with commits from authors %v in range", authorsInput)
 			}
 
 			sessionGap := cfg.SessionGap
