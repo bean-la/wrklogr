@@ -157,7 +157,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			if err != nil {
 				return fmt.Errorf("parse --since: %w", err)
 			}
-			until, err := parseDateBound(untilInput, true)
+			until, err := parseDateBound(untilInput, false)
 			if err != nil {
 				return fmt.Errorf("parse --until: %w", err)
 			}

@@ -71,7 +71,7 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 			if err != nil {
 				return fmt.Errorf("parse --since: %w", err)
 			}
-			until, err := parseDateBound(untilInput, true)
+			until, err := parseDateBound(untilInput, false)
 			if err != nil {
 				return fmt.Errorf("parse --until: %w", err)
 			}
