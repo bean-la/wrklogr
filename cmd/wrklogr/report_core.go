@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"sort"
@@ -219,7 +218,7 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 type nameMap func(id int) string
 
 // nokoSourceURL returns a stable identifier for a Noko entry used to skip duplicates on re-runs.
-func nokoSourceURL(author, date string, projectID, minutes int, desc string) string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%d|%s", author, date, projectID, minutes, desc)))
-	return fmt.Sprintf("wrklogr://%s/%s/%d/%x", author, date, projectID, h[:4])
+// Excludes description so LLM summarization doesn't break dedup across runs.
+func nokoSourceURL(author, date string, projectID, minutes int, _ string) string {
+	return fmt.Sprintf("wrklogr://%s/%s/%d/%d", author, date, projectID, minutes)
 }
