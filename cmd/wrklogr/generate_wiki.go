@@ -26,6 +26,8 @@ func newGenerateWikiCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.
 	var showCommits bool
 	var llmSummarize bool
 	var nokoDryRun bool
+	var nokoPush bool
+	var nokoToken string
 	var gcalFlag bool
 	var token string
 
@@ -163,6 +165,14 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 				for _, author := range authorsInput {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n─── %s ───\n", author)
 
+					resolvedNokoToken := strings.TrimSpace(nokoToken)
+					if resolvedNokoToken == "" {
+						resolvedNokoToken = strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
+					}
+					if resolvedNokoToken == "" && cfg.Noko != nil {
+						resolvedNokoToken = strings.TrimSpace(cfg.Noko.APIToken)
+					}
+
 					opts := reportOpts{
 						Repos:         repos,
 						Since:         since,
@@ -173,6 +183,8 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 						GCalFlag:      gcalFlag,
 						GCalCalendar:  gcalCal,
 						NokoDryRun:    nokoDryRun,
+						NokoPush:      nokoPush,
+						NokoToken:     resolvedNokoToken,
 						NokoConfig:    nokoCfg,
 						LLMSummarize:  llmSummarize,
 						LLMConfig:     &llmCfg,
@@ -381,6 +393,8 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 	cmd.Flags().BoolVar(&showCommits, "show-commits", false, "Show individual commits")
 	cmd.Flags().BoolVar(&llmSummarize, "llm-summarize", false, "Use LLM to summarize sessions")
 	cmd.Flags().BoolVar(&nokoDryRun, "noko-dry-run", false, "Include Noko dry-run entries")
+	cmd.Flags().BoolVar(&nokoPush, "push-noko", false, "Push sessions to Noko")
+	cmd.Flags().StringVar(&nokoToken, "noko-token", "", "Noko API token (defaults to NOKO_TOKEN env var or noko.api_token in config)")
 	cmd.Flags().BoolVar(&gcalFlag, "gcal", false, "Include Google Calendar events")
 	cmd.Flags().StringVar(&token, "token", "", "GitHub token")
 
