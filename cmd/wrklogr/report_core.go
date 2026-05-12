@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"sort"
@@ -152,6 +153,21 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 			llmClient = llm.NewClient(*opts.LLMConfig)
 		}
 
+		// Pre-fetch existing entries to skip duplicates on re-runs.
+		existingSourceURLs := make(map[string]struct{})
+		if opts.NokoPush && opts.Since != nil && opts.Until != nil {
+			existing, err := nokoClient.ListEntries(ctx, opts.Since.Format("2006-01-02"), opts.Until.Format("2006-01-02"))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not fetch existing noko entries for dedup: %v\n", err)
+			} else {
+				for _, e := range existing {
+					if e.SourceURL != "" {
+						existingSourceURLs[e.SourceURL] = struct{}{}
+					}
+				}
+			}
+		}
+
 		for _, day := range days {
 			for _, sess := range day.Sessions {
 				repos := getUniqueReposForSession(sess)
@@ -179,6 +195,7 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 					if summary != "" {
 						desc += ": " + summary
 					}
+					sourceURL := nokoSourceURL(opts.Author, day.Day, projID, minutesPerGroup, desc)
 					if opts.NokoDryRun && !opts.NokoPush {
 						entries = append(entries, nokoEntry{
 							Date:        day.Day,
@@ -187,11 +204,16 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 							Description: desc,
 						})
 					} else if opts.NokoPush {
+						if _, exists := existingSourceURLs[sourceURL]; exists {
+							fmt.Fprintf(os.Stderr, "skipping duplicate noko entry %s %d %s\n", day.Day, projID, sourceURL)
+							continue
+						}
 						entry := noko.EntryRequest{
 							Date:        day.Day,
 							Minutes:     minutesPerGroup,
 							Description: desc,
 							ProjectID:   projID,
+							SourceURL:   sourceURL,
 						}
 						if err := nokoClient.CreateEntry(ctx, entry); err != nil {
 							return nil, fmt.Errorf("push session %s %s: %w", day.Day, desc, err)
@@ -210,3 +232,9 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 }
 
 type nameMap func(id int) string
+
+// nokoSourceURL returns a stable identifier for a Noko entry used to skip duplicates on re-runs.
+func nokoSourceURL(author, date string, projectID, minutes int, desc string) string {
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%d|%s", author, date, projectID, minutes, desc)))
+	return fmt.Sprintf("wrklogr://%s/%s/%d/%x", author, date, projectID, h[:4])
+}

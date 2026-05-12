@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 const defaultBaseURL = "https://api.nokotime.com/v2"
@@ -35,6 +36,57 @@ type EntryRequest struct {
 	ProjectID   int    `json:"project_id,omitempty"`
 	ProjectName string `json:"project_name,omitempty"`
 	SourceURL   string `json:"source_url,omitempty"`
+}
+
+type Entry struct {
+	ID        int    `json:"id"`
+	Date      string `json:"date"`
+	Minutes   int    `json:"minutes"`
+	SourceURL string `json:"source_url"`
+}
+
+// ListEntries fetches all entries between from and to (YYYY-MM-DD), following pagination.
+func (c *Client) ListEntries(ctx context.Context, from, to string) ([]Entry, error) {
+	var all []Entry
+	pageNum := 1
+	for {
+		params := url.Values{}
+		params.Set("from", from)
+		params.Set("to", to)
+		params.Set("per_page", "100")
+		params.Set("page", fmt.Sprintf("%d", pageNum))
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/entries?"+params.Encode(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("X-NokoToken", c.token)
+		req.Header.Set("User-Agent", "wrklogr/1.0")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("do request: %w", err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read response: %w", readErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("noko API error (%d): %s", resp.StatusCode, string(body))
+		}
+
+		var batch []Entry
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, fmt.Errorf("unmarshal entries: %w", err)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			break
+		}
+		pageNum++
+	}
+	return all, nil
 }
 
 func (c *Client) CreateEntry(ctx context.Context, entry EntryRequest) error {
