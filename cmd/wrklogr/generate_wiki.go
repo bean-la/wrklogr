@@ -12,6 +12,7 @@ import (
 
 	"github.com/bean-la/wrklogr/internal/config"
 	ghclient "github.com/bean-la/wrklogr/internal/github"
+	"github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -165,14 +166,6 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 				for _, author := range authorsInput {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n─── %s ───\n", author)
 
-					resolvedNokoToken := strings.TrimSpace(nokoToken)
-					if resolvedNokoToken == "" {
-						resolvedNokoToken = strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
-					}
-					if resolvedNokoToken == "" && cfg.Noko != nil {
-						resolvedNokoToken = strings.TrimSpace(cfg.Noko.APIToken)
-					}
-
 					opts := reportOpts{
 						Repos:         repos,
 						Since:         since,
@@ -182,9 +175,8 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 						Timezone:      reportTZ,
 						GCalFlag:      gcalFlag,
 						GCalCalendar:  gcalCal,
-						NokoDryRun:    nokoDryRun,
-						NokoPush:      nokoPush,
-						NokoToken:     resolvedNokoToken,
+						NokoDryRun:    nokoDryRun || nokoPush, // accumulate entries; post-process block handles push
+						NokoPush:      false,
 						NokoConfig:    nokoCfg,
 						LLMSummarize:  llmSummarize,
 						LLMConfig:     &llmCfg,
@@ -200,6 +192,35 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 
 					allDays = append(allDays, result.Days...)
 					allNoko = append(allNoko, result.NokoEntries...)
+				}
+			}
+
+			// Push allNoko entries to Noko if requested (handles both cache and API paths)
+			if nokoPush && len(allNoko) > 0 {
+				resolvedNokoToken := strings.TrimSpace(nokoToken)
+				if resolvedNokoToken == "" {
+					resolvedNokoToken = strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
+				}
+				if resolvedNokoToken == "" && cfg.Noko != nil {
+					resolvedNokoToken = strings.TrimSpace(cfg.Noko.APIToken)
+				}
+				nokoClient := noko.NewClient(resolvedNokoToken, nil)
+				for _, entry := range allNoko {
+					srcURL := nokoSourceURL("", entry.Date, entry.ProjectID, entry.Minutes, entry.Description)
+					req := noko.EntryRequest{
+						Date:        entry.Date,
+						Minutes:     entry.Minutes,
+						Description: entry.Description,
+						ProjectID:   entry.ProjectID,
+						SourceURL:   srcURL,
+					}
+					if err := nokoClient.CreateEntry(context.Background(), req); err != nil {
+						if err == noko.ErrDuplicate {
+							fmt.Fprintf(cmd.ErrOrStderr(), "skipping duplicate noko entry %s project=%d\n", entry.Date, entry.ProjectID)
+							continue
+						}
+						fmt.Fprintf(cmd.ErrOrStderr(), "noko push %s project=%d: %v\n", entry.Date, entry.ProjectID, err)
+					}
 				}
 			}
 
