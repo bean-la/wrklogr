@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 const defaultBaseURL = "https://api.nokotime.com/v2"
@@ -110,13 +111,19 @@ func (c *Client) CreateEntry(ctx context.Context, entry EntryRequest) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("noko API error (%d): failed to read body: %w", resp.StatusCode, readErr)
-		}
-		return fmt.Errorf("noko API error (%d): %s", resp.StatusCode, string(respBody))
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return fmt.Errorf("noko API error (%d): failed to read body: %w", resp.StatusCode, readErr)
 	}
 
-	return nil
+	if resp.StatusCode == http.StatusCreated {
+		return nil
+	}
+	if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(respBody), `"duplicate"`) {
+		return ErrDuplicate
+	}
+	return fmt.Errorf("noko API error (%d): %s", resp.StatusCode, string(respBody))
 }
+
+// ErrDuplicate is returned by CreateEntry when Noko rejects the entry as a duplicate.
+var ErrDuplicate = fmt.Errorf("noko: duplicate entry")

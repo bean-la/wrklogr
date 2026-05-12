@@ -126,10 +126,10 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 			days := session.BucketByDay(sessions, reportTZ)
 
 			// --- Fetch GCal events ---
-\t\t\tvar gcalCal string
-\t\t\tif cfg.GCal != nil {
-\t\t\t\tgcalCal = cfg.GCal.Calendar
-\t\t\t}
+			var gcalCal string
+			if cfg.GCal != nil {
+				gcalCal = cfg.GCal.Calendar
+			}
 			events, err := gcal.FetchEvents(gcalCal, *since, *until)
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "calendar: error — %v\n", err)
@@ -379,13 +379,13 @@ type projectOption struct {
 func listProjectOptions(nc *config.NokoConfig) []projectOption {
 	ids := make(map[int]string)
 
-\t// Collect from per-repo mappings
-\tif nc.RepoProjects != nil {
-\t\tfor _, rp := range nc.RepoProjects {
-\t\t\tids[rp.ProjectID] = ""
-\t\t}
-\t}
-\t// (no hardcoded default projects — config comes from wrklogr.toml)
+	// Collect from per-repo mappings
+	if nc.RepoProjects != nil {
+		for _, rp := range nc.RepoProjects {
+			ids[rp.ProjectID] = ""
+		}
+	}
+	// (no hardcoded default projects — config comes from wrklogr.toml)
 
 	opts := make([]projectOption, 0, len(ids))
 	for id, name := range ids {
