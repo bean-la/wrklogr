@@ -85,6 +85,7 @@ into work sessions, and emits Markdown (and optionally JSON) reports.`,
 		}
 		return cfg, nil
 	}))
+	root.AddCommand(newNokoClearCmd())
 
 	// Default to running report when no subcommand is provided
 	root.RunE = func(cmd *cobra.Command, args []string) error {

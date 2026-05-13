@@ -46,8 +46,43 @@ type Entry struct {
 	SourceURL string `json:"source_url"`
 }
 
+type CurrentUser struct {
+	ID    int    `json:"id"`
+	Login string `json:"login"`
+	Email string `json:"email"`
+}
+
+// GetCurrentUser returns the authenticated Noko user.
+func (c *Client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/current_user", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("X-NokoToken", c.token)
+	req.Header.Set("User-Agent", "wrklogr/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read response: %w", readErr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("noko API error (%d): %s", resp.StatusCode, string(body))
+	}
+	var u CurrentUser
+	if err := json.Unmarshal(body, &u); err != nil {
+		return nil, fmt.Errorf("unmarshal current_user: %w", err)
+	}
+	return &u, nil
+}
+
 // ListEntries fetches all entries between from and to (YYYY-MM-DD), following pagination.
-func (c *Client) ListEntries(ctx context.Context, from, to string) ([]Entry, error) {
+// Pass non-empty userIDs to filter by specific users.
+func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int) ([]Entry, error) {
 	var all []Entry
 	pageNum := 1
 	for {
@@ -56,6 +91,9 @@ func (c *Client) ListEntries(ctx context.Context, from, to string) ([]Entry, err
 		params.Set("to", to)
 		params.Set("per_page", "100")
 		params.Set("page", fmt.Sprintf("%d", pageNum))
+		for _, id := range userIDs {
+			params.Add("user_ids[]", fmt.Sprintf("%d", id))
+		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/entries?"+params.Encode(), nil)
 		if err != nil {
@@ -127,3 +165,23 @@ func (c *Client) CreateEntry(ctx context.Context, entry EntryRequest) error {
 
 // ErrDuplicate is returned by CreateEntry when Noko rejects the entry as a duplicate.
 var ErrDuplicate = fmt.Errorf("noko: duplicate entry")
+
+// DeleteEntry deletes a Noko entry by ID.
+func (c *Client) DeleteEntry(ctx context.Context, id int) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/entries/%d", c.baseURL, id), nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("X-NokoToken", c.token)
+	req.Header.Set("User-Agent", "wrklogr/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("noko API error (%d)", resp.StatusCode)
+	}
+	return nil
+}
