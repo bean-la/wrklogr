@@ -171,13 +171,16 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 					if projID == 0 {
 						continue
 					}
-					desc := strings.Join(projRepos, ", ")
-					if len(sess.Commits) > 0 {
-						desc += fmt.Sprintf(" (%d commits)", len(sess.Commits))
-					}
 					summary := sessionSummary(sess, projRepos, llmClient)
+					repoLabel := strings.Join(projRepos, ", ")
+					if len(sess.Commits) > 0 {
+						repoLabel += fmt.Sprintf(" (%d commits)", len(sess.Commits))
+					}
+					var desc string
 					if summary != "" {
-						desc += ": " + summary
+						desc = summary + " [" + repoLabel + "]"
+					} else {
+						desc = repoLabel
 					}
 					sourceURL := nokoSourceURL(opts.Author, day.Day, projID, minutesPerGroup, desc)
 					if opts.NokoDryRun && !opts.NokoPush {
