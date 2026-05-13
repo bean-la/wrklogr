@@ -92,7 +92,7 @@ func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int
 		params.Set("per_page", "100")
 		params.Set("page", fmt.Sprintf("%d", pageNum))
 		for _, id := range userIDs {
-			params.Add("user_ids[]", fmt.Sprintf("%d", id))
+			params.Add("user_ids", fmt.Sprintf("%d", id))
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/entries?"+params.Encode(), nil)
