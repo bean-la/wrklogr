@@ -106,11 +106,14 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 
 			if cacheCoversRange && len(cacheLoaded.NokoEntries) > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "cache covers full range, skipping API calls\n")
-				allNoko = make([]nokoEntry, len(cacheLoaded.NokoEntries))
-				for i, e := range cacheLoaded.NokoEntries {
-					allNoko[i] = nokoEntry{
-						Date: e.Date, Minutes: e.Minutes, ProjectID: e.ProjectID, Description: e.Description,
+				for _, e := range cacheLoaded.NokoEntries {
+					// Filter to requested range only — the cache may span a wider window
+					if e.Date < sinceFmt || e.Date >= untilFmt {
+						continue
 					}
+					allNoko = append(allNoko, nokoEntry{
+						Date: e.Date, Minutes: e.Minutes, ProjectID: e.ProjectID, Description: e.Description,
+					})
 				}
 				dayMap := make(map[string]*session.DaySummary)
 				for _, cd := range cacheLoaded.Days {
