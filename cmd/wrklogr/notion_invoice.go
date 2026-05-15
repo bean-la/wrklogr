@@ -54,6 +54,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	var localPaths []string
 	var dryRun bool
 	var update bool
+	var author string
 
 	cmd := &cobra.Command{
 		Use:   "notion-invoice",
@@ -105,6 +106,9 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 					}
 				}
 				for _, c := range commits {
+					if author != "" && !strings.EqualFold(c.AuthorName, author) {
+						continue
+					}
 					ts := c.AuthorDate
 					if ts.IsZero() {
 						ts = c.CommitterDate
@@ -152,6 +156,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 		},
 	}
 
+	cmd.Flags().StringVar(&author, "author", "", "Only include commits by this author name (case-insensitive)")
 	cmd.Flags().BoolVar(&update, "update", false, "Update an existing invoice page instead of creating a new one (requires --invoice-number)")
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start of billing period (YYYY-MM-DD, default: first of last month)")
 	cmd.Flags().StringVar(&untilInput, "until", "", "End of billing period (YYYY-MM-DD, default: last of last month)")
