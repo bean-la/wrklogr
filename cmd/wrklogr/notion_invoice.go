@@ -14,16 +14,18 @@ import (
 	"github.com/bean-la/wrklogr/internal/config"
 	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/localgit"
+	"github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/notion"
 	"github.com/bean-la/wrklogr/internal/session"
 	"github.com/spf13/cobra"
 )
 
 type projectAgg struct {
-	Minutes int
-	Repos   map[string]struct{}
-	Msgs    []string
-	msgSeen map[string]struct{}
+	Minutes   int
+	Repos     map[string]struct{}
+	Msgs      []string // commit first-lines (up to 20, for LLM input)
+	msgSeen   map[string]struct{}
+	NokoDescs []string // descriptions fetched from Noko entries
 }
 
 func (a *projectAgg) addSession(sess session.Session, repos []string) {
@@ -36,7 +38,7 @@ func (a *projectAgg) addSession(sess session.Session, repos []string) {
 			continue
 		}
 		a.Repos[c.Repo] = struct{}{}
-		if len(a.Msgs) < 5 {
+		if len(a.Msgs) < 20 {
 			msg := strings.SplitN(c.Message, "\n", 2)[0]
 			msg = strings.TrimSpace(msg)
 			if msg != "" {
@@ -172,6 +174,36 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			billedTo := until.Format("2006-01-02")
 			monthLabel := since.Format("January 2006")
 
+			// Fetch Noko log descriptions for each project to enrich the invoice.
+			nokoToken := strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
+			if nokoToken == "" && cfg.Noko != nil {
+				nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
+			}
+			if nokoToken != "" {
+				projIDs := make([]int, 0, len(aggs))
+				for id := range aggs {
+					projIDs = append(projIDs, id)
+				}
+				nokoClient := noko.NewClient(nokoToken, nil)
+				entries, nokoErr := nokoClient.ListEntries(ctx, billedFrom, billedTo, nil, projIDs)
+				if nokoErr != nil {
+					fmt.Fprintf(os.Stderr, "warn: fetch noko entries: %v\n", nokoErr)
+				} else {
+					for _, e := range entries {
+						if agg, ok := aggs[e.ProjectID]; ok && strings.TrimSpace(e.Description) != "" {
+							agg.NokoDescs = append(agg.NokoDescs, strings.TrimSpace(e.Description))
+						}
+					}
+				}
+			}
+
+			// Build LLM client if configured.
+			var llmClient *llm.Client
+			llmCfg := resolveLLMConfig(cfg, "", "")
+			if llmCfg.APIKey != "" {
+				llmClient = llm.NewClient(llmCfg)
+			}
+
 			nc := notion.NewClient(token, nil)
 
 			role := cfg.Notion.Role
@@ -180,9 +212,9 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			}
 
 			if update {
-				return runUpdate(cmd, ctx, nc, cfg, invoiceNumber, role, aggs, billedFrom, billedTo, monthLabel, dryRun)
+				return runUpdate(cmd, ctx, nc, cfg, invoiceNumber, role, aggs, billedFrom, billedTo, monthLabel, dryRun, llmClient)
 			}
-			return runCreate(cmd, ctx, nc, cfg, invoiceNumber, role, aggs, billedFrom, billedTo, monthLabel, dryRun)
+			return runCreate(cmd, ctx, nc, cfg, invoiceNumber, role, aggs, billedFrom, billedTo, monthLabel, dryRun, llmClient)
 		},
 	}
 
@@ -303,6 +335,7 @@ func runCreate(
 	aggs map[int]*projectAgg,
 	billedFrom, billedTo, monthLabel string,
 	dryRun bool,
+	llmClient *llm.Client,
 ) error {
 	projIDs := make([]int, 0, len(aggs))
 	for id := range aggs {
@@ -330,7 +363,7 @@ func runCreate(
 		}
 		amount := hours * rate
 		repoNames := sortedRepos(agg)
-		desc := buildInvoiceDescription(monthLabel, hours, repoNames, agg.Msgs)
+		desc := buildInvoiceDescription(monthLabel, repoNames, agg.NokoDescs, agg.Msgs, llmClient)
 
 		inv := notion.InvoiceRequest{
 			InvoiceNumber: invoiceNumber,
@@ -344,7 +377,7 @@ func runCreate(
 		}
 
 		if dryRun {
-			printInvoiceSummary(cmd, client.Name, invoiceNumber, amount, hours, rate, role, billedFrom, billedTo, client.NET, client.NetDays, repoNames, desc)
+			printInvoiceSummary(cmd, client.Name, invoiceNumber, amount, hours, rate, role, billedFrom, billedTo, client.NET, client.NetDays, repoNames, agg.NokoDescs, desc)
 			continue
 		}
 
@@ -366,6 +399,7 @@ func runUpdate(
 	aggs map[int]*projectAgg,
 	billedFrom, billedTo, monthLabel string,
 	dryRun bool,
+	llmClient *llm.Client,
 ) error {
 	if invoiceNumber == "" {
 		return fmt.Errorf("--update requires --invoice-number")
@@ -410,6 +444,7 @@ func runUpdate(
 					agg.Msgs = append(agg.Msgs, m)
 				}
 			}
+			agg.NokoDescs = append(agg.NokoDescs, a.NokoDescs...)
 		}
 	}
 
@@ -425,7 +460,7 @@ func runUpdate(
 	}
 	amount := hours * rate
 	repoNames := sortedRepos(agg)
-	desc := buildInvoiceDescription(monthLabel, hours, repoNames, agg.Msgs)
+	desc := buildInvoiceDescription(monthLabel, repoNames, agg.NokoDescs, agg.Msgs, llmClient)
 
 	inv := notion.InvoiceRequest{
 		Amount:      amount,
@@ -440,7 +475,7 @@ func runUpdate(
 
 	if dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(), "[update] %s\n", invoiceNumber)
-		printInvoiceSummary(cmd, clientName, invoiceNumber, amount, hours, rate, role, billedFrom, billedTo, inv.NET, inv.NetDays, repoNames, desc)
+		printInvoiceSummary(cmd, clientName, invoiceNumber, amount, hours, rate, role, billedFrom, billedTo, inv.NET, inv.NetDays, repoNames, agg.NokoDescs, desc)
 		return nil
 	}
 
@@ -460,24 +495,52 @@ func sortedRepos(agg *projectAgg) []string {
 	return names
 }
 
-func printInvoiceSummary(cmd *cobra.Command, clientName, number string, amount, hours, rate float64, role, from, to, net string, netDays int, repos []string, desc string) {
+func printInvoiceSummary(cmd *cobra.Command, clientName, number string, amount, hours, rate float64, role, from, to, net string, netDays int, repos []string, nokoDescs []string, desc string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "─── %s ───\n", clientName)
 	fmt.Fprintf(cmd.OutOrStdout(), "  number:  %s\n", number)
 	fmt.Fprintf(cmd.OutOrStdout(), "  amount:  $%.2f (%.2fh × $%.0f %s)\n", amount, hours, rate, role)
 	fmt.Fprintf(cmd.OutOrStdout(), "  dates:   %s → %s\n", from, to)
 	fmt.Fprintf(cmd.OutOrStdout(), "  net:     %s (%d days)\n", net, netDays)
 	fmt.Fprintf(cmd.OutOrStdout(), "  repos:   %s\n", strings.Join(repos, ", "))
+	if len(nokoDescs) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  logs:\n")
+		for _, d := range nokoDescs {
+			fmt.Fprintf(cmd.OutOrStdout(), "    • %s\n", d)
+		}
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  desc:    %s\n", desc)
 }
 
-func buildInvoiceDescription(month string, hours float64, repos []string, msgs []string) string {
+// buildInvoiceDescription builds the Notion invoice description.
+// If an llmClient is provided, it uses LLM to summarize Noko logs + commit messages.
+// Otherwise falls back to a concatenation of the top commit messages.
+func buildInvoiceDescription(month string, repos []string, nokoDescs []string, commitMsgs []string, llmClient *llm.Client) string {
+	if llmClient != nil {
+		// Prefer Noko log descriptions (already summarized per session) then supplement with raw commits.
+		var items []string
+		items = append(items, nokoDescs...)
+		items = append(items, commitMsgs...)
+		if len(items) > 0 {
+			summary, err := llmClient.SummarizeForInvoice(items)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: LLM invoice summary: %v\n", err)
+			} else if summary != "" {
+				if len(summary) > 200 {
+					summary = summary[:197] + "..."
+				}
+				return summary
+			}
+		}
+	}
+
+	// Fallback: classic format.
 	parts := []string{month + " development"}
 	if len(repos) > 0 {
 		parts = append(parts, "("+strings.Join(repos, ", ")+")")
 	}
 	desc := strings.Join(parts, " ")
-	if len(msgs) > 0 {
-		top := msgs
+	if len(commitMsgs) > 0 {
+		top := commitMsgs
 		if len(top) > 3 {
 			top = top[:3]
 		}

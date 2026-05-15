@@ -40,10 +40,12 @@ type EntryRequest struct {
 }
 
 type Entry struct {
-	ID        int    `json:"id"`
-	Date      string `json:"date"`
-	Minutes   int    `json:"minutes"`
-	SourceURL string `json:"source_url"`
+	ID          int    `json:"id"`
+	Date        string `json:"date"`
+	Minutes     int    `json:"minutes"`
+	Description string `json:"description"`
+	ProjectID   int    `json:"project_id"`
+	SourceURL   string `json:"source_url"`
 }
 
 type CurrentUser struct {
@@ -81,8 +83,8 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
 }
 
 // ListEntries fetches all entries between from and to (YYYY-MM-DD), following pagination.
-// Pass non-empty userIDs to filter by specific users.
-func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int) ([]Entry, error) {
+// Pass non-empty userIDs or projectIDs to filter; pass nil/empty to include all.
+func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int, projectIDs []int) ([]Entry, error) {
 	var all []Entry
 	pageNum := 1
 	for {
@@ -93,6 +95,9 @@ func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int
 		params.Set("page", fmt.Sprintf("%d", pageNum))
 		for _, id := range userIDs {
 			params.Add("user_ids", fmt.Sprintf("%d", id))
+		}
+		for _, id := range projectIDs {
+			params.Add("project_ids", fmt.Sprintf("%d", id))
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/entries?"+params.Encode(), nil)

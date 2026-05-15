@@ -62,7 +62,7 @@ func newNokoClearCmd() *cobra.Command {
 				userIDs = []int{me.ID}
 			}
 
-			entries, err := client.ListEntries(ctx, fromStr, toStr, userIDs)
+			entries, err := client.ListEntries(ctx, fromStr, toStr, userIDs, nil)
 			if err != nil {
 				return fmt.Errorf("list entries: %w", err)
 			}

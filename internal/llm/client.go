@@ -117,6 +117,78 @@ func (c *Client) Summarize(commits []string) (string, error) {
 	return summary, nil
 }
 
+// SummarizeForInvoice generates a 1-2 sentence invoice description from a mix of
+// Noko log entries and commit messages.
+func (c *Client) SummarizeForInvoice(items []string) (string, error) {
+	key := "invoice:" + strings.Join(items, "\x00")
+	if cached, ok := c.cache[key]; ok {
+		return cached, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Write a concise 1-2 sentence invoice description for the following work:\n\n")
+	for i, item := range items {
+		if i >= 30 {
+			sb.WriteString(fmt.Sprintf("... and %d more items\n", len(items)-30))
+			break
+		}
+		line := strings.SplitN(item, "\n", 2)[0]
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		sb.WriteString("- " + line + "\n")
+	}
+	sb.WriteString("\nDescription:")
+
+	req := chatRequest{
+		Model: c.model,
+		Messages: []message{
+			{Role: "system", Content: "You write professional invoice descriptions for freelance software development. Write 1-2 concise sentences summarizing what was delivered. Focus on outcomes and features, not implementation details. Do not mention commits, logs, or internal tools. Start directly with what was accomplished."},
+			{Role: "user", Content: sb.String()},
+		},
+		MaxTokens: 150,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("api call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	var chatResp chatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+	if chatResp.Error != nil {
+		return "", fmt.Errorf("api error: %s", chatResp.Error.Message)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned")
+	}
+
+	summary := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	c.cache[key] = summary
+	return summary, nil
+}
+
 func buildPrompt(commits []string) string {
 	var sb strings.Builder
 	sb.WriteString("Summarize this work session from the following commits:\n\n")
