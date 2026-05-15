@@ -150,7 +150,7 @@ func (c *Client) SummarizeForInvoice(items []string) (string, error) {
 			{Role: "system", Content: "You write professional invoice descriptions for freelance software development. Write exactly 1 short sentence (under 120 characters) summarizing what was delivered. Focus on the most significant outcome. Do not mention commits, logs, repos, or internal tools. Start directly with what was accomplished."},
 			{Role: "user", Content: sb.String()},
 		},
-		MaxTokens: 150,
+		MaxTokens: 60,
 	}
 
 	body, err := json.Marshal(req)

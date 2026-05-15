@@ -525,8 +525,8 @@ func buildInvoiceDescription(month string, repos []string, nokoDescs []string, c
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warn: LLM invoice summary: %v\n", err)
 			} else if summary != "" {
-				if len(summary) > 200 {
-					summary = summary[:197] + "..."
+				if len(summary) > 150 {
+					summary = summary[:147] + "..."
 				}
 				return summary
 			}
