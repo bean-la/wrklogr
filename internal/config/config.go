@@ -34,12 +34,14 @@ type LLMConfig struct {
 }
 
 type NotionConfig struct {
-	APIToken    string `toml:"api_token"`
-	InvoiceDBID string `toml:"invoice_db_id"`
-	ClientsDBID string `toml:"clients_db_id"`
+	APIToken    string  `toml:"api_token"`
+	InvoiceDBID string  `toml:"invoice_db_id"`
+	ClientsDBID string  `toml:"clients_db_id"`
 	// Role selects which rate column to use from the Clients DB:
 	// backend (default) | frontend | design | sr_backend | ios
-	Role string `toml:"role"`
+	Role        string  `toml:"role"`
+	// DefaultRate is used when the client's rate for the configured role is unset in Notion.
+	DefaultRate float64 `toml:"default_rate"`
 }
 
 type NokoConfig struct {

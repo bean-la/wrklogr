@@ -283,6 +283,9 @@ func runCreate(
 		}
 
 		rate := client.RateForRole(role)
+		if rate == 0 {
+			rate = cfg.Notion.DefaultRate
+		}
 		amount := hours * rate
 		repoNames := sortedRepos(agg)
 		desc := buildInvoiceDescription(monthLabel, hours, repoNames, agg.Msgs)
@@ -374,6 +377,9 @@ func runUpdate(
 	if client != nil {
 		rate = client.RateForRole(role)
 		clientName = client.Name
+	}
+	if rate == 0 {
+		rate = cfg.Notion.DefaultRate
 	}
 	amount := hours * rate
 	repoNames := sortedRepos(agg)
