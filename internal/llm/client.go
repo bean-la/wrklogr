@@ -126,14 +126,17 @@ func (c *Client) SummarizeForInvoice(items []string) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Write a concise 1-2 sentence invoice description for the following work:\n\n")
+	sb.WriteString("Write a 1-sentence invoice description for the following work:\n\n")
 	for i, item := range items {
 		if i >= 30 {
 			sb.WriteString(fmt.Sprintf("... and %d more items\n", len(items)-30))
 			break
 		}
 		line := strings.SplitN(item, "\n", 2)[0]
-		line = strings.TrimSpace(line)
+		// Strip trailing [repo (N commits)] tags added by wrklogr
+		if idx := strings.LastIndex(line, " ["); idx != -1 && strings.HasSuffix(line, "commits)]") {
+			line = strings.TrimSpace(line[:idx])
+		}
 		if line == "" {
 			continue
 		}
@@ -144,7 +147,7 @@ func (c *Client) SummarizeForInvoice(items []string) (string, error) {
 	req := chatRequest{
 		Model: c.model,
 		Messages: []message{
-			{Role: "system", Content: "You write professional invoice descriptions for freelance software development. Write 1-2 concise sentences summarizing what was delivered. Focus on outcomes and features, not implementation details. Do not mention commits, logs, or internal tools. Start directly with what was accomplished."},
+			{Role: "system", Content: "You write professional invoice descriptions for freelance software development. Write exactly 1 short sentence (under 120 characters) summarizing what was delivered. Focus on the most significant outcome. Do not mention commits, logs, repos, or internal tools. Start directly with what was accomplished."},
 			{Role: "user", Content: sb.String()},
 		},
 		MaxTokens: 150,
