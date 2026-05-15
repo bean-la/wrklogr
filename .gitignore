@@ -2,3 +2,5 @@
 /wrklogr.toml
 reports/
 .env
+_ignore/
+.DS_Store

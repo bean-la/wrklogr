@@ -18,6 +18,7 @@ A CLI tool for generating worklogs from GitHub commits. Fetches commits from con
 - **Noko Integration**: Push session summaries to Noko time tracking with per-repo project mapping
 - **Google Calendar Integration**: Include public calendar events (phone calls, meetings) as work sessions via iCal feed
 - **Interactive Review**: Guided wizard to review, assign calendar events to projects, dry-run, and push to Noko
+- **Notion Invoicing**: Create and update draft invoice pages in Notion, with amounts pulled from per-client hourly rates
 
 ## Installation
 
@@ -78,6 +79,13 @@ timezone = "America/New_York"
 # Google Calendar integration (reads public iCal feed)
 [gcal]
 calendar = "your@email.com"
+
+# Notion invoice integration
+[notion]
+# api_token = "secret_..."  # or set NOTION_TOKEN in .env
+invoice_db_id = "your-invoice-status-db-id"
+clients_db_id = "your-clients-db-id"
+role = "backend"  # which hourly rate to use: backend | frontend | design | sr_backend | ios
 ```
 
 ## Usage
@@ -205,6 +213,66 @@ wrklogr review --month 2026-04
 - `--month string` - Month to review (YYYY-MM format)
 - `--session-gap string` - Override session split gap
 - `--timezone string` - IANA timezone for day bucketing
+
+### `wrklogr notion-invoice`
+
+Create or update draft invoice pages in a Notion Invoice Status database. Hours are computed from local git history, and amounts are calculated using per-client hourly rates stored in a linked Notion Clients database.
+
+Requires a `[notion]` section in `wrklogr.toml` and `NOTION_TOKEN` set in `.env` or the environment. See [docs/notion-invoicing.md](docs/notion-invoicing.md) for full setup instructions.
+
+#### Create a new invoice (previous month by default)
+
+```bash
+# Dry-run — prints computed amount and description without writing to Notion
+wrklogr notion-invoice \
+  --invoice-number ADV-807 \
+  --local-path ~/dev/client-repo \
+  --dry-run
+
+# Create the draft page
+wrklogr notion-invoice \
+  --invoice-number ADV-807 \
+  --local-path ~/dev/client-repo
+```
+
+#### Update an existing invoice
+
+Use `--update` to patch an existing page by invoice number. Reads the client already linked on the page to resolve the correct rate and NET terms.
+
+```bash
+# Dry-run first
+wrklogr notion-invoice \
+  --update --invoice-number ADV-806 \
+  --since 2026-04-01 --until 2026-04-30 \
+  --local-path ~/dev/client-repo \
+  --dry-run
+
+# Write when satisfied
+wrklogr notion-invoice \
+  --update --invoice-number ADV-806 \
+  --since 2026-04-01 --until 2026-04-30 \
+  --local-path ~/dev/client-repo
+```
+
+The update patches **Amount, Billed Dates, Description, Net, Net Days** only — Invoice Number, Client relation, and Invoice Status are not touched.
+
+#### Multiple repos for one client
+
+```bash
+wrklogr notion-invoice \
+  --invoice-number ADV-808 \
+  --local-path ~/dev/client-api \
+  --local-path ~/dev/client-web
+```
+
+**Flags:**
+- `--invoice-number string` - Invoice number (e.g. ADV-0200)
+- `--since string` - Start of billing period (YYYY-MM-DD, default: first of last month)
+- `--until string` - End of billing period (YYYY-MM-DD, default: last of last month)
+- `--local-path strings` - Local git repo path(s) to scan
+- `--update` - Update an existing invoice page instead of creating a new one (requires `--invoice-number`)
+- `--dry-run` - Print what would be created or updated without writing to Notion
+- `--notion-token string` - Notion API token (defaults to `NOTION_TOKEN` env or `notion.api_token` in config)
 
 ### `wrklogr version`
 
