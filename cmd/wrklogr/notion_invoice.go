@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/bean-la/wrklogr/internal/config"
+	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/localgit"
 	"github.com/bean-la/wrklogr/internal/notion"
 	"github.com/bean-la/wrklogr/internal/session"
@@ -51,6 +53,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	var untilInput string
 	var invoiceNumber string
 	var notionToken string
+	var githubToken string
 	var localPaths []string
 	var dryRun bool
 	var update bool
@@ -87,49 +90,71 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return err
 			}
 
-			paths := localPaths
-			if len(paths) == 0 {
-				paths = []string{"."}
-			}
+			ctx := context.Background()
+			var days []session.DaySummary
 
-			var merged []session.Commit
-			for _, p := range paths {
-				commits, scanErr := localgit.ListCommits(p, &since, &until)
-				if scanErr != nil {
-					return fmt.Errorf("git log %s: %w", p, scanErr)
-				}
-				label := filepath.Base(p)
-				if p == "." {
-					abs, absErr := filepath.Abs(".")
-					if absErr == nil {
-						label = filepath.Base(abs)
+			if len(localPaths) > 0 {
+				var merged []session.Commit
+				for _, p := range localPaths {
+					commits, scanErr := localgit.ListCommits(p, &since, &until)
+					if scanErr != nil {
+						return fmt.Errorf("git log %s: %w", p, scanErr)
+					}
+					label := filepath.Base(p)
+					for _, c := range commits {
+						if author != "" && !strings.EqualFold(c.AuthorName, author) {
+							continue
+						}
+						ts := c.AuthorDate
+						if ts.IsZero() {
+							ts = c.CommitterDate
+						}
+						if ts.IsZero() {
+							continue
+						}
+						merged = append(merged, session.Commit{
+							Repo:      label,
+							SHA:       c.SHA,
+							Message:   c.Subject,
+							Timestamp: ts,
+						})
 					}
 				}
-				for _, c := range commits {
-					if author != "" && !strings.EqualFold(c.AuthorName, author) {
-						continue
-					}
-					ts := c.AuthorDate
-					if ts.IsZero() {
-						ts = c.CommitterDate
-					}
-					if ts.IsZero() {
-						continue
-					}
-					merged = append(merged, session.Commit{
-						Repo:      label,
-						SHA:       c.SHA,
-						Message:   c.Subject,
-						Timestamp: ts,
-					})
+				sort.Slice(merged, func(i, j int) bool {
+					return merged[i].Timestamp.Before(merged[j].Timestamp)
+				})
+				days = session.BucketByDay(session.Build(merged, cfg.SessionGap), cfg.Timezone)
+			} else {
+				// GitHub API mode — uses repos from config, filtered by --author.
+				ghTok := strings.TrimSpace(githubToken)
+				if ghTok == "" {
+					ghTok = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 				}
+				if ghTok == "" {
+					ghTok = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+				}
+				if ghTok == "" {
+					if out, ghErr := exec.Command("gh", "auth", "token").Output(); ghErr == nil {
+						ghTok = strings.TrimSpace(string(out))
+					}
+				}
+				llmCfg := llm.Config{}
+				result, reportErr := runReport(ctx, cmd.OutOrStdout(), reportOpts{
+					Repos:       cfg.Repos,
+					Since:       &since,
+					Until:       &until,
+					Author:      author,
+					SessionGap:  cfg.SessionGap,
+					Timezone:    cfg.Timezone,
+					NokoConfig:  cfg.Noko,
+					GitHubToken: ghTok,
+					LLMConfig:   &llmCfg,
+				})
+				if reportErr != nil {
+					return fmt.Errorf("fetch commits: %w", reportErr)
+				}
+				days = result.Days
 			}
-
-			sort.Slice(merged, func(i, j int) bool {
-				return merged[i].Timestamp.Before(merged[j].Timestamp)
-			})
-			sessions := session.Build(merged, cfg.SessionGap)
-			days := session.BucketByDay(sessions, cfg.Timezone)
 
 			aggs := aggregateByProject(days, cfg.Noko)
 			if len(aggs) == 0 {
@@ -142,7 +167,6 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			monthLabel := since.Format("January 2006")
 
 			nc := notion.NewClient(token, nil)
-			ctx := context.Background()
 
 			role := cfg.Notion.Role
 			if role == "" {
@@ -156,7 +180,8 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 		},
 	}
 
-	cmd.Flags().StringVar(&author, "author", "", "Only include commits by this author name (case-insensitive)")
+	cmd.Flags().StringVar(&author, "author", "", "Only include commits by this author (GitHub login for API mode, name for local mode)")
+	cmd.Flags().StringVar(&githubToken, "token", "", "GitHub token for API mode (defaults to GITHUB_TOKEN, GH_TOKEN, or gh CLI)")
 	cmd.Flags().BoolVar(&update, "update", false, "Update an existing invoice page instead of creating a new one (requires --invoice-number)")
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start of billing period (YYYY-MM-DD, default: first of last month)")
 	cmd.Flags().StringVar(&untilInput, "until", "", "End of billing period (YYYY-MM-DD, default: last of last month)")
