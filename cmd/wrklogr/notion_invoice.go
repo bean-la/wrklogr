@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -58,6 +59,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	var dryRun bool
 	var update bool
 	var author string
+	var repoPatterns []string
 
 	cmd := &cobra.Command{
 		Use:   "notion-invoice",
@@ -156,6 +158,10 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				days = result.Days
 			}
 
+			if len(repoPatterns) > 0 {
+				days = filterDaysByRepo(days, repoPatterns)
+			}
+
 			aggs := aggregateByProject(days, cfg.Noko)
 			if len(aggs) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no sessions found for the given date range")
@@ -181,6 +187,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	}
 
 	cmd.Flags().StringVar(&author, "author", "", "Only include commits by this author (GitHub login for API mode, name for local mode)")
+	cmd.Flags().StringSliceVar(&repoPatterns, "repo", nil, "Only include sessions touching repos matching these glob patterns (e.g. 'Third-Eye-Tarot/*')")
 	cmd.Flags().StringVar(&githubToken, "token", "", "GitHub token for API mode (defaults to GITHUB_TOKEN, GH_TOKEN, or gh CLI)")
 	cmd.Flags().BoolVar(&update, "update", false, "Update an existing invoice page instead of creating a new one (requires --invoice-number)")
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start of billing period (YYYY-MM-DD, default: first of last month)")
@@ -219,6 +226,41 @@ func resolveBillingRange(sinceInput, untilInput string) (time.Time, time.Time, e
 	firstOfPrevMonth := firstOfThisMonth.AddDate(0, -1, 0)
 	lastOfPrevMonth := firstOfThisMonth.Add(-time.Second)
 	return firstOfPrevMonth, lastOfPrevMonth, nil
+}
+
+// filterDaysByRepo drops commits that don't match any of the given glob patterns,
+// then drops sessions and days that become empty.
+func filterDaysByRepo(days []session.DaySummary, patterns []string) []session.DaySummary {
+	repoMatch := func(repo string) bool {
+		for _, pat := range patterns {
+			if ok, _ := path.Match(pat, repo); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	out := make([]session.DaySummary, 0, len(days))
+	for _, day := range days {
+		var sessions []session.Session
+		for _, sess := range day.Sessions {
+			var commits []session.Commit
+			for _, c := range sess.Commits {
+				if repoMatch(c.Repo) {
+					commits = append(commits, c)
+				}
+			}
+			if len(commits) > 0 {
+				sess.Commits = commits
+				sessions = append(sessions, sess)
+			}
+		}
+		if len(sessions) > 0 {
+			day.Sessions = sessions
+			out = append(out, day)
+		}
+	}
+	return out
 }
 
 // aggregateByProject totals minutes per Noko project ID across all sessions.
