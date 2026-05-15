@@ -190,7 +190,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 					fmt.Fprintf(os.Stderr, "warn: fetch noko entries: %v\n", nokoErr)
 				} else {
 					for _, e := range entries {
-						if agg, ok := aggs[e.ProjectID]; ok && strings.TrimSpace(e.Description) != "" {
+						if agg, ok := aggs[e.ProjectID()]; ok && strings.TrimSpace(e.Description) != "" {
 							agg.NokoDescs = append(agg.NokoDescs, strings.TrimSpace(e.Description))
 						}
 					}

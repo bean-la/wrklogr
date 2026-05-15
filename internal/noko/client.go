@@ -39,14 +39,21 @@ type EntryRequest struct {
 	SourceURL   string `json:"source_url,omitempty"`
 }
 
-type Entry struct {
-	ID          int    `json:"id"`
-	Date        string `json:"date"`
-	Minutes     int    `json:"minutes"`
-	Description string `json:"description"`
-	ProjectID   int    `json:"project_id"`
-	SourceURL   string `json:"source_url"`
+type entryProject struct {
+	ID int `json:"id"`
 }
+
+type Entry struct {
+	ID          int          `json:"id"`
+	Date        string       `json:"date"`
+	Minutes     int          `json:"minutes"`
+	Description string       `json:"description"`
+	Project     entryProject `json:"project"`
+	SourceURL   string       `json:"source_url"`
+}
+
+// ProjectID returns the Noko project ID for this entry.
+func (e Entry) ProjectID() int { return e.Project.ID }
 
 type CurrentUser struct {
 	ID    int    `json:"id"`

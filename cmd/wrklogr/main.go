@@ -817,6 +817,8 @@ func resolveLLMConfig(cfg *config.RuntimeConfig, flagKey string, flagModel strin
 		llmCfg.APIKey = flagKey
 	} else if k := strings.TrimSpace(os.Getenv("LLM_API_KEY")); k != "" {
 		llmCfg.APIKey = k
+	} else if k := strings.TrimSpace(os.Getenv("LLM_API_TOKEN")); k != "" {
+		llmCfg.APIKey = k
 	} else if cfg.LLM != nil {
 		llmCfg.APIKey = cfg.LLM.APIKey
 	}
