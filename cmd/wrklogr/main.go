@@ -25,9 +25,38 @@ import (
 var version = "dev"
 
 func main() {
+	loadDotEnv(".env")
 	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// loadDotEnv reads KEY=VALUE pairs from path and sets them in the environment
+// for any key not already set. Silently does nothing if the file is absent.
+func loadDotEnv(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		// Strip surrounding quotes.
+		if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+			v = v[1 : len(v)-1]
+		}
+		if k != "" && os.Getenv(k) == "" {
+			os.Setenv(k, v)
+		}
 	}
 }
 
@@ -86,6 +115,12 @@ into work sessions, and emits Markdown (and optionally JSON) reports.`,
 		return cfg, nil
 	}))
 	root.AddCommand(newNokoClearCmd())
+	root.AddCommand(newNotionInvoiceCmd(func() (*config.RuntimeConfig, error) {
+		if cfg == nil {
+			return nil, fmt.Errorf("config is not loaded")
+		}
+		return cfg, nil
+	}))
 
 	// Default to running report when no subcommand is provided
 	root.RunE = func(cmd *cobra.Command, args []string) error {

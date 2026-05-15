@@ -14,12 +14,13 @@ import (
 const defaultSessionGap = 2 * time.Hour
 
 type Config struct {
-	Repos      []string    `toml:"repos"`
-	SessionGap string      `toml:"session_gap"`
-	Timezone   string      `toml:"timezone"`
-	Noko       *NokoConfig `toml:"noko"`
-	GCal       *GCalConfig `toml:"gcal"`
-	LLM        *LLMConfig  `toml:"llm"`
+	Repos      []string      `toml:"repos"`
+	SessionGap string        `toml:"session_gap"`
+	Timezone   string        `toml:"timezone"`
+	Noko       *NokoConfig   `toml:"noko"`
+	GCal       *GCalConfig   `toml:"gcal"`
+	LLM        *LLMConfig    `toml:"llm"`
+	Notion     *NotionConfig `toml:"notion"`
 }
 
 type GCalConfig struct {
@@ -30,6 +31,15 @@ type LLMConfig struct {
 	APIKey  string `toml:"api_key"`
 	Model   string `toml:"model"`
 	BaseURL string `toml:"base_url"`
+}
+
+type NotionConfig struct {
+	APIToken    string `toml:"api_token"`
+	InvoiceDBID string `toml:"invoice_db_id"`
+	ClientsDBID string `toml:"clients_db_id"`
+	// Role selects which rate column to use from the Clients DB:
+	// backend (default) | frontend | design | sr_backend | ios
+	Role string `toml:"role"`
 }
 
 type NokoConfig struct {
@@ -64,6 +74,7 @@ type RuntimeConfig struct {
 	Noko       *NokoConfig
 	GCal       *GCalConfig
 	LLM        *LLMConfig
+	Notion     *NotionConfig
 	Path       string
 }
 
@@ -148,6 +159,7 @@ func buildRuntimeConfig(cfg Config, path string) (*RuntimeConfig, error) {
 		Noko:       cfg.Noko,
 		GCal:       cfg.GCal,
 		LLM:        cfg.LLM,
+		Notion:     cfg.Notion,
 		Path:       path,
 	}, nil
 }

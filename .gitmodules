@@ -1,3 +1,9 @@
 [submodule "_ext/wrklogr-reports"]
 	path = _ext/wrklogr-reports
 	url = git@github.com:bean-la/wrklogr-reports
+[submodule "_ext/bean-invoicing-web"]
+	path = _ext/bean-invoicing-web
+	url = git@github.com:bean-la/bean-invoicing-web.git
+[submodule "_ext/bean-invoicing-api"]
+	path = _ext/bean-invoicing-api
+	url = git@github.com:bean-la/bean-invoicing-api.git
