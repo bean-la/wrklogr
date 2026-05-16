@@ -63,7 +63,7 @@ func TestListCommitsPaginatesAndPassesDateFilters(t *testing.T) {
 	}
 	client.api.BaseURL = baseURL
 
-	commits, err := client.ListCommits(context.Background(), "bean", "wrklogr", &since, &until)
+	commits, err := client.ListCommits(context.Background(), "bean-la", "wrklogr", &since, &until)
 	if err != nil {
 		t.Fatalf("ListCommits returned error: %v", err)
 	}

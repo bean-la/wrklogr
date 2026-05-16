@@ -134,6 +134,7 @@ func (c *Client) FindClientByNokoProjectID(ctx context.Context, dbID string, pro
 type InvoiceRecord struct {
 	PageID       string
 	ClientPageID string
+	Amount       float64
 }
 
 // FindInvoiceByNumber queries the Invoice Status DB for the page with the given invoice number.
@@ -239,10 +240,13 @@ func parseInvoicePage(page map[string]any) (*InvoiceRecord, error) {
 	id, _ := page["id"].(string)
 	props, _ := page["properties"].(map[string]any)
 	rec := &InvoiceRecord{PageID: id}
-	if clientProp, ok := props["Client"].(map[string]any); ok {
-		if rel, ok := clientProp["relation"].([]any); ok && len(rel) > 0 {
-			if item, ok := rel[0].(map[string]any); ok {
-				rec.ClientPageID, _ = item["id"].(string)
+	if props != nil {
+		rec.Amount = numProp(props, "Amount")
+		if clientProp, ok := props["Client"].(map[string]any); ok {
+			if rel, ok := clientProp["relation"].([]any); ok && len(rel) > 0 {
+				if item, ok := rel[0].(map[string]any); ok {
+					rec.ClientPageID, _ = item["id"].(string)
+				}
 			}
 		}
 	}

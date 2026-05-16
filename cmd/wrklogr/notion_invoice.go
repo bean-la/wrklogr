@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,482 @@ func (a *projectAgg) addSession(sess session.Session, repos []string) {
 	}
 }
 
+// invoiceLine holds one invoice row after resolving clients/rates/description (shared by CLI and wizard).
+type invoiceLine struct {
+	ClientName    string
+	InvoiceNumber string
+	Amount        float64
+	Hours         float64
+	Rate          float64
+	Role          string
+	BilledFrom    string
+	BilledTo      string
+	NET           string
+	NetDays       int
+	Repos         []string
+	NokoDescs     []string
+	Desc          string
+	ClientPageID  string
+	TargetPageID  string // existing Notion page for updates
+}
+
+type notionInvoiceOpts struct {
+	SinceInput    string
+	UntilInput    string
+	InvoiceNumber string
+	Update        bool
+	Author        string
+	RepoPatterns  []string
+	LocalPaths    []string
+	GithubToken   string
+	NotionToken   string
+	DryRun        bool
+	SilentFetch   bool
+	DescOverride  string
+}
+
+type notionInvoiceFetchOpts struct {
+	SinceInput    string
+	UntilInput    string
+	Author        string
+	RepoPatterns  []string
+	LocalPaths    []string
+	GithubToken   string
+	SilentFetch   bool
+}
+
+type notionInvoiceFetched struct {
+	Since      time.Time
+	Until      time.Time
+	BilledFrom string
+	BilledTo   string
+	MonthLabel string
+	Aggs       map[int]*projectAgg
+	LLMClient  *llm.Client
+}
+
+func resolveNotionAPIToken(cfg *config.RuntimeConfig, notionFlag string) string {
+	token := strings.TrimSpace(notionFlag)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("NOTION_TOKEN"))
+	}
+	if token == "" && cfg.Notion != nil {
+		token = strings.TrimSpace(cfg.Notion.APIToken)
+	}
+	return token
+}
+
+func notionInvoiceFlagChanged(cmd *cobra.Command) bool {
+	names := []string{"update", "invoice-number", "since", "until", "author", "repo", "dry-run", "local-path", "notion-token", "token"}
+	for _, name := range names {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func notionPublicPageURL(pageID string) string {
+	s := strings.ReplaceAll(strings.TrimSpace(pageID), "-", "")
+	if s == "" {
+		return ""
+	}
+	return "https://www.notion.so/" + s
+}
+
+func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.RuntimeConfig, opts notionInvoiceFetchOpts) (*notionInvoiceFetched, error) {
+	since, until, err := resolveBillingRange(opts.SinceInput, opts.UntilInput)
+	if err != nil {
+		return nil, err
+	}
+
+	var days []session.DaySummary
+
+	if len(opts.LocalPaths) > 0 {
+		var merged []session.Commit
+		for _, p := range opts.LocalPaths {
+			commits, scanErr := localgit.ListCommits(p, &since, &until)
+			if scanErr != nil {
+				return nil, fmt.Errorf("git log %s: %w", p, scanErr)
+			}
+			label := filepath.Base(p)
+			for _, c := range commits {
+				if opts.Author != "" && !strings.EqualFold(c.AuthorName, opts.Author) {
+					continue
+				}
+				ts := c.AuthorDate
+				if ts.IsZero() {
+					ts = c.CommitterDate
+				}
+				if ts.IsZero() {
+					continue
+				}
+				merged = append(merged, session.Commit{
+					Repo:      label,
+					SHA:       c.SHA,
+					Message:   c.Subject,
+					Timestamp: ts,
+				})
+			}
+		}
+		sort.Slice(merged, func(i, j int) bool {
+			return merged[i].Timestamp.Before(merged[j].Timestamp)
+		})
+		days = session.BucketByDay(session.Build(merged, cfg.SessionGap), cfg.Timezone)
+	} else {
+		ghTok := strings.TrimSpace(opts.GithubToken)
+		if ghTok == "" {
+			ghTok = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+		}
+		if ghTok == "" {
+			ghTok = strings.TrimSpace(os.Getenv("GH_TOKEN"))
+		}
+		if ghTok == "" {
+			if out, ghErr := exec.Command("gh", "auth", "token").Output(); ghErr == nil {
+				ghTok = strings.TrimSpace(string(out))
+			}
+		}
+		llmCfg := llm.Config{}
+		reportOut := io.Writer(cmd.OutOrStdout())
+		if opts.SilentFetch {
+			reportOut = io.Discard
+		}
+		result, reportErr := runReport(ctx, reportOut, reportOpts{
+			Repos:       cfg.Repos,
+			Since:       &since,
+			Until:       &until,
+			Author:      opts.Author,
+			SessionGap:  cfg.SessionGap,
+			Timezone:    cfg.Timezone,
+			NokoConfig:  cfg.Noko,
+			GitHubToken: ghTok,
+			LLMConfig:   &llmCfg,
+		})
+		if reportErr != nil {
+			return nil, fmt.Errorf("fetch commits: %w", reportErr)
+		}
+		days = result.Days
+	}
+
+	if len(opts.RepoPatterns) > 0 {
+		days = filterDaysByRepo(days, opts.RepoPatterns)
+	}
+
+	aggs := aggregateByProject(days, cfg.Noko)
+	if len(aggs) == 0 {
+		return &notionInvoiceFetched{
+			Since: since, Until: until,
+			BilledFrom: since.Format("2006-01-02"),
+			BilledTo:   until.Format("2006-01-02"),
+			MonthLabel: since.Format("January 2006"),
+			Aggs:       aggs,
+		}, nil
+	}
+
+	billedFrom := since.Format("2006-01-02")
+	billedTo := until.Format("2006-01-02")
+	monthLabel := since.Format("January 2006")
+
+	nokoToken := strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
+	if nokoToken == "" && cfg.Noko != nil {
+		nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
+	}
+	if nokoToken != "" {
+		projIDs := make([]int, 0, len(aggs))
+		for id := range aggs {
+			projIDs = append(projIDs, id)
+		}
+		nokoClient := noko.NewClient(nokoToken, nil)
+		entries, nokoErr := nokoClient.ListEntries(ctx, billedFrom, billedTo, nil, projIDs)
+		if nokoErr != nil {
+			fmt.Fprintf(os.Stderr, "warn: fetch noko entries: %v\n", nokoErr)
+		} else {
+			for _, e := range entries {
+				if agg, ok := aggs[e.ProjectID()]; ok && strings.TrimSpace(e.Description) != "" {
+					agg.NokoDescs = append(agg.NokoDescs, strings.TrimSpace(e.Description))
+				}
+			}
+		}
+	}
+
+	llmCfg := resolveLLMConfig(cfg, "", "")
+	var llmClient *llm.Client
+	if llmCfg.APIKey != "" {
+		llmClient = llm.NewClient(llmCfg)
+	}
+
+	return &notionInvoiceFetched{
+		Since: since, Until: until,
+		BilledFrom: billedFrom,
+		BilledTo:   billedTo,
+		MonthLabel: monthLabel,
+		Aggs:       aggs,
+		LLMClient:  llmClient,
+	}, nil
+}
+
+func collectCreateInvoiceLines(
+	ctx context.Context,
+	nc *notion.Client,
+	cfg *config.RuntimeConfig,
+	invoiceNumber, role string,
+	aggs map[int]*projectAgg,
+	billedFrom, billedTo, monthLabel string,
+	llmClient *llm.Client,
+	descOverride string,
+) []invoiceLine {
+	projIDs := make([]int, 0, len(aggs))
+	for id := range aggs {
+		projIDs = append(projIDs, id)
+	}
+	sort.Ints(projIDs)
+
+	out := make([]invoiceLine, 0, len(projIDs))
+	for _, projID := range projIDs {
+		agg := aggs[projID]
+		hours := float64(agg.Minutes) / 60.0
+
+		client, err := nc.FindClientByNokoProjectID(ctx, cfg.Notion.ClientsDBID, projID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warn: notion lookup for project %d: %v\n", projID, err)
+			continue
+		}
+		if client == nil {
+			fmt.Fprintf(os.Stderr, "warn: no Notion client for Noko project %d — skipping\n", projID)
+			continue
+		}
+
+		rate := client.RateForRole(role)
+		if rate == 0 {
+			rate = cfg.Notion.DefaultRate
+		}
+		amount := hours * rate
+		repoNames := sortedRepos(agg)
+
+		desc := strings.TrimSpace(descOverride)
+		if desc == "" {
+			desc = buildInvoiceDescription(monthLabel, repoNames, agg.NokoDescs, agg.Msgs, llmClient)
+		}
+
+		out = append(out, invoiceLine{
+			ClientName:    client.Name,
+			InvoiceNumber: invoiceNumber,
+			Amount:        amount,
+			Hours:         hours,
+			Rate:          rate,
+			Role:          role,
+			BilledFrom:    billedFrom,
+			BilledTo:      billedTo,
+			NET:           client.NET,
+			NetDays:       client.NetDays,
+			Repos:         repoNames,
+			NokoDescs:     agg.NokoDescs,
+			Desc:          desc,
+			ClientPageID:  client.PageID,
+		})
+	}
+	return out
+}
+
+func collectUpdateInvoiceLine(
+	ctx context.Context,
+	nc *notion.Client,
+	cfg *config.RuntimeConfig,
+	invoiceNumber, role string,
+	aggs map[int]*projectAgg,
+	billedFrom, billedTo, monthLabel string,
+	llmClient *llm.Client,
+	descOverride string,
+) (*invoiceLine, error) {
+	if invoiceNumber == "" {
+		return nil, fmt.Errorf("--update requires --invoice-number")
+	}
+
+	existing, err := nc.FindInvoiceByNumber(ctx, cfg.Notion.InvoiceDBID, invoiceNumber)
+	if err != nil {
+		return nil, fmt.Errorf("find invoice %s: %w", invoiceNumber, err)
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("invoice %s not found in Notion", invoiceNumber)
+	}
+
+	var client *notion.ClientRecord
+	if existing.ClientPageID != "" {
+		client, err = nc.GetClientPage(ctx, existing.ClientPageID)
+		if err != nil {
+			return nil, fmt.Errorf("get client page for %s: %w", invoiceNumber, err)
+		}
+	}
+
+	var agg *projectAgg
+	if client != nil && client.NokoProjectID != 0 {
+		agg = aggs[client.NokoProjectID]
+	}
+	if agg == nil {
+		agg = &projectAgg{
+			Repos:   make(map[string]struct{}),
+			msgSeen: make(map[string]struct{}),
+		}
+		for _, a := range aggs {
+			agg.Minutes += a.Minutes
+			for r := range a.Repos {
+				agg.Repos[r] = struct{}{}
+			}
+			for _, m := range a.Msgs {
+				if _, seen := agg.msgSeen[m]; !seen {
+					agg.msgSeen[m] = struct{}{}
+					agg.Msgs = append(agg.Msgs, m)
+				}
+			}
+			agg.NokoDescs = append(agg.NokoDescs, a.NokoDescs...)
+		}
+	}
+
+	hours := float64(agg.Minutes) / 60.0
+	rate := 0.0
+	clientName := invoiceNumber
+	if client != nil {
+		rate = client.RateForRole(role)
+		clientName = client.Name
+	}
+	if rate == 0 {
+		rate = cfg.Notion.DefaultRate
+	}
+	amount := hours * rate
+	repoNames := sortedRepos(agg)
+
+	desc := strings.TrimSpace(descOverride)
+	if desc == "" {
+		desc = buildInvoiceDescription(monthLabel, repoNames, agg.NokoDescs, agg.Msgs, llmClient)
+	}
+
+	net := ""
+	netDays := 0
+	clientPageID := ""
+	if client != nil {
+		net = client.NET
+		netDays = client.NetDays
+		clientPageID = client.PageID
+	}
+
+	return &invoiceLine{
+		ClientName:    clientName,
+		InvoiceNumber: invoiceNumber,
+		Amount:        amount,
+		Hours:         hours,
+		Rate:          rate,
+		Role:          role,
+		BilledFrom:    billedFrom,
+		BilledTo:      billedTo,
+		NET:           net,
+		NetDays:       netDays,
+		Repos:         repoNames,
+		NokoDescs:     agg.NokoDescs,
+		Desc:          desc,
+		ClientPageID:  clientPageID,
+		TargetPageID:  existing.PageID,
+	}, nil
+}
+
+func writeCreateInvoices(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, dryRun bool, lines []invoiceLine) error {
+	for _, line := range lines {
+		if dryRun {
+			printInvoiceSummary(cmd, line.ClientName, line.InvoiceNumber, line.Amount, line.Hours, line.Rate, line.Role, line.BilledFrom, line.BilledTo, line.NET, line.NetDays, line.Repos, line.NokoDescs, line.Desc)
+			continue
+		}
+		inv := notion.InvoiceRequest{
+			InvoiceNumber: line.InvoiceNumber,
+			Amount:        line.Amount,
+			BilledFrom:    line.BilledFrom,
+			BilledTo:      line.BilledTo,
+			ClientPageID:  line.ClientPageID,
+			Description:   line.Desc,
+			NET:           line.NET,
+			NetDays:       line.NetDays,
+		}
+		pageID, err := nc.CreateInvoice(ctx, cfg.Notion.InvoiceDBID, inv)
+		if err != nil {
+			return fmt.Errorf("create invoice for %s: %w", line.ClientName, err)
+		}
+		url := notionPublicPageURL(pageID)
+		fmt.Fprintf(cmd.OutOrStdout(), "created invoice for %s: %s amount=$%.2f\n", line.ClientName, url, line.Amount)
+	}
+	return nil
+}
+
+func writeUpdateInvoice(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, invoiceNumber string, dryRun bool, line *invoiceLine) error {
+	if dryRun {
+		fmt.Fprintf(cmd.OutOrStdout(), "[update] %s\n", invoiceNumber)
+		printInvoiceSummary(cmd, line.ClientName, line.InvoiceNumber, line.Amount, line.Hours, line.Rate, line.Role, line.BilledFrom, line.BilledTo, line.NET, line.NetDays, line.Repos, line.NokoDescs, line.Desc)
+		return nil
+	}
+
+	inv := notion.InvoiceRequest{
+		Amount:      line.Amount,
+		BilledFrom:  line.BilledFrom,
+		BilledTo:    line.BilledTo,
+		Description: line.Desc,
+		NET:         line.NET,
+		NetDays:     line.NetDays,
+	}
+	if err := nc.UpdateInvoice(ctx, line.TargetPageID, inv); err != nil {
+		return fmt.Errorf("update invoice %s: %w", invoiceNumber, err)
+	}
+	url := notionPublicPageURL(line.TargetPageID)
+	fmt.Fprintf(cmd.OutOrStdout(), "updated %s (%s): %s amount=$%.2f\n", invoiceNumber, line.ClientName, url, line.Amount)
+	return nil
+}
+
+func executeNotionInvoice(cmd *cobra.Command, cfg *config.RuntimeConfig, opts notionInvoiceOpts) error {
+	if cfg.Notion == nil {
+		return fmt.Errorf("notion config required: add [notion] section to wrklogr.toml")
+	}
+	if cfg.Noko == nil {
+		return fmt.Errorf("noko config required for project mapping: add [noko] section to wrklogr.toml")
+	}
+
+	token := resolveNotionAPIToken(cfg, opts.NotionToken)
+	if token == "" {
+		return fmt.Errorf("notion API token required: set --notion-token, NOTION_TOKEN, or notion.api_token in config")
+	}
+
+	ctx := context.Background()
+	fetched, err := fetchInvoicePipeline(ctx, cmd, cfg, notionInvoiceFetchOpts{
+		SinceInput:    opts.SinceInput,
+		UntilInput:    opts.UntilInput,
+		Author:        opts.Author,
+		RepoPatterns:  opts.RepoPatterns,
+		LocalPaths:    opts.LocalPaths,
+		GithubToken:   opts.GithubToken,
+		SilentFetch:   opts.SilentFetch,
+	})
+	if err != nil {
+		return err
+	}
+	if len(fetched.Aggs) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no sessions found for the given date range")
+		return nil
+	}
+
+	nc := notion.NewClient(token, nil)
+
+	role := cfg.Notion.Role
+	if role == "" {
+		role = "backend"
+	}
+
+	if opts.Update {
+		line, collErr := collectUpdateInvoiceLine(ctx, nc, cfg, opts.InvoiceNumber, role, fetched.Aggs, fetched.BilledFrom, fetched.BilledTo, fetched.MonthLabel, fetched.LLMClient, opts.DescOverride)
+		if collErr != nil {
+			return collErr
+		}
+		return writeUpdateInvoice(cmd, ctx, nc, cfg, opts.InvoiceNumber, opts.DryRun, line)
+	}
+
+	lines := collectCreateInvoiceLines(ctx, nc, cfg, opts.InvoiceNumber, role, fetched.Aggs, fetched.BilledFrom, fetched.BilledTo, fetched.MonthLabel, fetched.LLMClient, opts.DescOverride)
+	return writeCreateInvoices(cmd, ctx, nc, cfg, opts.DryRun, lines)
+}
+
 func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Command {
 	var sinceInput string
 	var untilInput string
@@ -71,152 +548,39 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			if cfg.Notion == nil {
-				return fmt.Errorf("notion config required: add [notion] section to wrklogr.toml")
+			if len(args) > 0 {
+				return fmt.Errorf("unexpected arguments %v — did you mean \"wrklogr notion-invoice wizard\"?", args)
 			}
-			if cfg.Noko == nil {
-				return fmt.Errorf("noko config required for project mapping: add [noko] section to wrklogr.toml")
+			if !notionInvoiceFlagChanged(cmd) {
+				return runNotionInvoiceWizard(cmd, getConfig)
 			}
-
-			token := strings.TrimSpace(notionToken)
-			if token == "" {
-				token = strings.TrimSpace(os.Getenv("NOTION_TOKEN"))
-			}
-			if token == "" {
-				token = cfg.Notion.APIToken
-			}
-			if token == "" {
-				return fmt.Errorf("notion API token required: set --notion-token, NOTION_TOKEN, or notion.api_token in config")
-			}
-
-			since, until, err := resolveBillingRange(sinceInput, untilInput)
-			if err != nil {
-				return err
-			}
-
-			ctx := context.Background()
-			var days []session.DaySummary
-
-			if len(localPaths) > 0 {
-				var merged []session.Commit
-				for _, p := range localPaths {
-					commits, scanErr := localgit.ListCommits(p, &since, &until)
-					if scanErr != nil {
-						return fmt.Errorf("git log %s: %w", p, scanErr)
-					}
-					label := filepath.Base(p)
-					for _, c := range commits {
-						if author != "" && !strings.EqualFold(c.AuthorName, author) {
-							continue
-						}
-						ts := c.AuthorDate
-						if ts.IsZero() {
-							ts = c.CommitterDate
-						}
-						if ts.IsZero() {
-							continue
-						}
-						merged = append(merged, session.Commit{
-							Repo:      label,
-							SHA:       c.SHA,
-							Message:   c.Subject,
-							Timestamp: ts,
-						})
-					}
-				}
-				sort.Slice(merged, func(i, j int) bool {
-					return merged[i].Timestamp.Before(merged[j].Timestamp)
-				})
-				days = session.BucketByDay(session.Build(merged, cfg.SessionGap), cfg.Timezone)
-			} else {
-				// GitHub API mode — uses repos from config, filtered by --author.
-				ghTok := strings.TrimSpace(githubToken)
-				if ghTok == "" {
-					ghTok = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-				}
-				if ghTok == "" {
-					ghTok = strings.TrimSpace(os.Getenv("GH_TOKEN"))
-				}
-				if ghTok == "" {
-					if out, ghErr := exec.Command("gh", "auth", "token").Output(); ghErr == nil {
-						ghTok = strings.TrimSpace(string(out))
-					}
-				}
-				llmCfg := llm.Config{}
-				result, reportErr := runReport(ctx, cmd.OutOrStdout(), reportOpts{
-					Repos:       cfg.Repos,
-					Since:       &since,
-					Until:       &until,
-					Author:      author,
-					SessionGap:  cfg.SessionGap,
-					Timezone:    cfg.Timezone,
-					NokoConfig:  cfg.Noko,
-					GitHubToken: ghTok,
-					LLMConfig:   &llmCfg,
-				})
-				if reportErr != nil {
-					return fmt.Errorf("fetch commits: %w", reportErr)
-				}
-				days = result.Days
-			}
-
-			if len(repoPatterns) > 0 {
-				days = filterDaysByRepo(days, repoPatterns)
-			}
-
-			aggs := aggregateByProject(days, cfg.Noko)
-			if len(aggs) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no sessions found for the given date range")
-				return nil
-			}
-
-			billedFrom := since.Format("2006-01-02")
-			billedTo := until.Format("2006-01-02")
-			monthLabel := since.Format("January 2006")
-
-			// Fetch Noko log descriptions for each project to enrich the invoice.
-			nokoToken := strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
-			if nokoToken == "" && cfg.Noko != nil {
-				nokoToken = strings.TrimSpace(cfg.Noko.APIToken)
-			}
-			if nokoToken != "" {
-				projIDs := make([]int, 0, len(aggs))
-				for id := range aggs {
-					projIDs = append(projIDs, id)
-				}
-				nokoClient := noko.NewClient(nokoToken, nil)
-				entries, nokoErr := nokoClient.ListEntries(ctx, billedFrom, billedTo, nil, projIDs)
-				if nokoErr != nil {
-					fmt.Fprintf(os.Stderr, "warn: fetch noko entries: %v\n", nokoErr)
-				} else {
-					for _, e := range entries {
-						if agg, ok := aggs[e.ProjectID()]; ok && strings.TrimSpace(e.Description) != "" {
-							agg.NokoDescs = append(agg.NokoDescs, strings.TrimSpace(e.Description))
-						}
-					}
-				}
-			}
-
-			// Build LLM client if configured.
-			var llmClient *llm.Client
-			llmCfg := resolveLLMConfig(cfg, "", "")
-			if llmCfg.APIKey != "" {
-				llmClient = llm.NewClient(llmCfg)
-			}
-
-			nc := notion.NewClient(token, nil)
-
-			role := cfg.Notion.Role
-			if role == "" {
-				role = "backend"
-			}
-
-			if update {
-				return runUpdate(cmd, ctx, nc, cfg, invoiceNumber, role, aggs, billedFrom, billedTo, monthLabel, dryRun, llmClient)
-			}
-			return runCreate(cmd, ctx, nc, cfg, invoiceNumber, role, aggs, billedFrom, billedTo, monthLabel, dryRun, llmClient)
+			return executeNotionInvoice(cmd, cfg, notionInvoiceOpts{
+				SinceInput:    sinceInput,
+				UntilInput:    untilInput,
+				InvoiceNumber: invoiceNumber,
+				Update:        update,
+				Author:        author,
+				RepoPatterns:  repoPatterns,
+				LocalPaths:    localPaths,
+				GithubToken:   githubToken,
+				NotionToken:   notionToken,
+				DryRun:        dryRun,
+				SilentFetch:   false,
+			})
 		},
 	}
+
+	wizardCmd := &cobra.Command{
+		Use:   "wizard",
+		Short: "Interactive invoicing wizard",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("unexpected arguments %v", args)
+			}
+			return runNotionInvoiceWizard(cmd, getConfig)
+		},
+	}
+	cmd.AddCommand(wizardCmd)
 
 	cmd.Flags().StringVar(&author, "author", "", "Only include commits by this author (GitHub login for API mode, name for local mode)")
 	cmd.Flags().StringSliceVar(&repoPatterns, "repo", nil, "Only include sessions touching repos matching these glob patterns (e.g. 'Third-Eye-Tarot/*')")
@@ -324,166 +688,6 @@ func aggregateByProject(days []session.DaySummary, nc *config.NokoConfig) map[in
 		}
 	}
 	return result
-}
-
-func runCreate(
-	cmd *cobra.Command,
-	ctx context.Context,
-	nc *notion.Client,
-	cfg *config.RuntimeConfig,
-	invoiceNumber, role string,
-	aggs map[int]*projectAgg,
-	billedFrom, billedTo, monthLabel string,
-	dryRun bool,
-	llmClient *llm.Client,
-) error {
-	projIDs := make([]int, 0, len(aggs))
-	for id := range aggs {
-		projIDs = append(projIDs, id)
-	}
-	sort.Ints(projIDs)
-
-	for _, projID := range projIDs {
-		agg := aggs[projID]
-		hours := float64(agg.Minutes) / 60.0
-
-		client, err := nc.FindClientByNokoProjectID(ctx, cfg.Notion.ClientsDBID, projID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warn: notion lookup for project %d: %v\n", projID, err)
-			continue
-		}
-		if client == nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warn: no Notion client for Noko project %d — skipping\n", projID)
-			continue
-		}
-
-		rate := client.RateForRole(role)
-		if rate == 0 {
-			rate = cfg.Notion.DefaultRate
-		}
-		amount := hours * rate
-		repoNames := sortedRepos(agg)
-		desc := buildInvoiceDescription(monthLabel, repoNames, agg.NokoDescs, agg.Msgs, llmClient)
-
-		inv := notion.InvoiceRequest{
-			InvoiceNumber: invoiceNumber,
-			Amount:        amount,
-			BilledFrom:    billedFrom,
-			BilledTo:      billedTo,
-			ClientPageID:  client.PageID,
-			Description:   desc,
-			NET:           client.NET,
-			NetDays:       client.NetDays,
-		}
-
-		if dryRun {
-			printInvoiceSummary(cmd, client.Name, invoiceNumber, amount, hours, rate, role, billedFrom, billedTo, client.NET, client.NetDays, repoNames, agg.NokoDescs, desc)
-			continue
-		}
-
-		pageID, err := nc.CreateInvoice(ctx, cfg.Notion.InvoiceDBID, inv)
-		if err != nil {
-			return fmt.Errorf("create invoice for %s: %w", client.Name, err)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "created invoice for %s: page=%s amount=$%.2f\n", client.Name, pageID, amount)
-	}
-	return nil
-}
-
-func runUpdate(
-	cmd *cobra.Command,
-	ctx context.Context,
-	nc *notion.Client,
-	cfg *config.RuntimeConfig,
-	invoiceNumber, role string,
-	aggs map[int]*projectAgg,
-	billedFrom, billedTo, monthLabel string,
-	dryRun bool,
-	llmClient *llm.Client,
-) error {
-	if invoiceNumber == "" {
-		return fmt.Errorf("--update requires --invoice-number")
-	}
-
-	existing, err := nc.FindInvoiceByNumber(ctx, cfg.Notion.InvoiceDBID, invoiceNumber)
-	if err != nil {
-		return fmt.Errorf("find invoice %s: %w", invoiceNumber, err)
-	}
-	if existing == nil {
-		return fmt.Errorf("invoice %s not found in Notion", invoiceNumber)
-	}
-
-	// Resolve client from the invoice's existing relation.
-	var client *notion.ClientRecord
-	if existing.ClientPageID != "" {
-		client, err = nc.GetClientPage(ctx, existing.ClientPageID)
-		if err != nil {
-			return fmt.Errorf("get client page for %s: %w", invoiceNumber, err)
-		}
-	}
-
-	// Pick the aggregate that matches this client's Noko project.
-	var agg *projectAgg
-	if client != nil && client.NokoProjectID != 0 {
-		agg = aggs[client.NokoProjectID]
-	}
-	if agg == nil {
-		// Fall back: merge all projects into one.
-		agg = &projectAgg{
-			Repos:   make(map[string]struct{}),
-			msgSeen: make(map[string]struct{}),
-		}
-		for _, a := range aggs {
-			agg.Minutes += a.Minutes
-			for r := range a.Repos {
-				agg.Repos[r] = struct{}{}
-			}
-			for _, m := range a.Msgs {
-				if _, seen := agg.msgSeen[m]; !seen {
-					agg.msgSeen[m] = struct{}{}
-					agg.Msgs = append(agg.Msgs, m)
-				}
-			}
-			agg.NokoDescs = append(agg.NokoDescs, a.NokoDescs...)
-		}
-	}
-
-	hours := float64(agg.Minutes) / 60.0
-	rate := 0.0
-	clientName := invoiceNumber
-	if client != nil {
-		rate = client.RateForRole(role)
-		clientName = client.Name
-	}
-	if rate == 0 {
-		rate = cfg.Notion.DefaultRate
-	}
-	amount := hours * rate
-	repoNames := sortedRepos(agg)
-	desc := buildInvoiceDescription(monthLabel, repoNames, agg.NokoDescs, agg.Msgs, llmClient)
-
-	inv := notion.InvoiceRequest{
-		Amount:      amount,
-		BilledFrom:  billedFrom,
-		BilledTo:    billedTo,
-		Description: desc,
-	}
-	if client != nil {
-		inv.NET = client.NET
-		inv.NetDays = client.NetDays
-	}
-
-	if dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "[update] %s\n", invoiceNumber)
-		printInvoiceSummary(cmd, clientName, invoiceNumber, amount, hours, rate, role, billedFrom, billedTo, inv.NET, inv.NetDays, repoNames, agg.NokoDescs, desc)
-		return nil
-	}
-
-	if err := nc.UpdateInvoice(ctx, existing.PageID, inv); err != nil {
-		return fmt.Errorf("update invoice %s: %w", invoiceNumber, err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "updated %s (%s): amount=$%.2f\n", invoiceNumber, clientName, amount)
-	return nil
 }
 
 func sortedRepos(agg *projectAgg) []string {

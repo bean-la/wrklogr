@@ -86,7 +86,7 @@ func TestSplitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("splitRepo() error = %v", err)
 	}
-	if owner != "bean" || repo != "wrklogr" {
+	if owner != "bean-la" || repo != "wrklogr" {
 		t.Fatalf("got owner/repo %s/%s, want bean-la/wrklogr", owner, repo)
 	}
 
