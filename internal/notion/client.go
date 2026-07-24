@@ -43,7 +43,7 @@ type ClientRecord struct {
 	InvoicingContact string
 }
 
-// RateForRole returns the hourly rate for the given role string.
+// RateForRole returns the daily rate for the given role string.
 // Unrecognised roles fall back to the backend rate.
 func (r *ClientRecord) RateForRole(role string) float64 {
 	switch strings.ToLower(role) {

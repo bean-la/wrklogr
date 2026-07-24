@@ -301,7 +301,8 @@ func collectCreateInvoiceLines(
 		if rate == 0 {
 			rate = cfg.Notion.DefaultRate
 		}
-		amount := hours * rate
+		days := hours / 8.0
+		amount := days * rate
 		repoNames := sortedRepos(agg)
 
 		desc := strings.TrimSpace(descOverride)
@@ -393,7 +394,8 @@ func collectUpdateInvoiceLine(
 	if rate == 0 {
 		rate = cfg.Notion.DefaultRate
 	}
-	amount := hours * rate
+	days := hours / 8.0
+	amount := days * rate
 	repoNames := sortedRepos(agg)
 
 	desc := strings.TrimSpace(descOverride)
