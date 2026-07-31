@@ -7,6 +7,11 @@ set -e
 echo "🔨 Building wrklogr..."
 go build -o wrklogr ./cmd/wrklogr/
 
+if [[ -f tools/invoice-pdf/package.json ]]; then
+  echo "📦 Installing invoice PDF tool dependencies..."
+  (cd tools/invoice-pdf && npm install --omit=dev)
+fi
+
 # Determine installation directory
 INSTALL_DIR=""
 

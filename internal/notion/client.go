@@ -137,6 +137,14 @@ type InvoiceRecord struct {
 	Amount       float64
 }
 
+// GetPage returns the raw Notion page JSON for a page id.
+func (c *Client) GetPage(ctx context.Context, pageID string) ([]byte, error) {
+	if strings.TrimSpace(pageID) == "" {
+		return nil, fmt.Errorf("page id is required")
+	}
+	return c.do(ctx, http.MethodGet, "/pages/"+pageID, nil)
+}
+
 // FindInvoiceByNumber queries the Invoice Status DB for the page with the given invoice number.
 // Returns nil, nil if not found.
 func (c *Client) FindInvoiceByNumber(ctx context.Context, dbID, number string) (*InvoiceRecord, error) {
@@ -173,6 +181,21 @@ func (c *Client) GetClientPage(ctx context.Context, pageID string) (*ClientRecor
 		return nil, fmt.Errorf("unmarshal page: %w", err)
 	}
 	return parseClientPage(page)
+}
+
+// UpdateInvoiceDescription patches only the Description property.
+func (c *Client) UpdateInvoiceDescription(ctx context.Context, pageID, description string) error {
+	if pageID == "" {
+		return fmt.Errorf("page id is required")
+	}
+	if strings.TrimSpace(description) == "" {
+		return fmt.Errorf("description is required")
+	}
+	props := map[string]any{
+		"Description": richTextPropValue(description),
+	}
+	_, err := c.do(ctx, http.MethodPatch, "/pages/"+pageID, map[string]any{"properties": props})
+	return err
 }
 
 // UpdateInvoice patches an existing invoice page with the computed fields.

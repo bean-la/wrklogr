@@ -109,3 +109,18 @@ func makeSession(commits []Commit) Session {
 		FuzzyHours: hours,
 	}
 }
+
+// SessionFromCommits builds a single session from commits (sorted by timestamp).
+// FuzzyHours are derived from the span of the given commits only, matching makeSession.
+// Used after repo filtering so invoice hours stay aligned with Noko push splits.
+func SessionFromCommits(commits []Commit) (Session, bool) {
+	if len(commits) == 0 {
+		return Session{}, false
+	}
+	sorted := make([]Commit, len(commits))
+	copy(sorted, commits)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+	})
+	return makeSession(sorted), true
+}

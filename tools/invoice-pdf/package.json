@@ -1,0 +1,20 @@
+{
+  "name": "wrklogr-invoice-pdf",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Invoice PDF renderer for wrklogr (ported from bean-invoicing)",
+  "bin": {
+    "wrklogr-invoice-pdf": "./print.mjs"
+  },
+  "scripts": {
+    "print": "node print.mjs"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "puppeteer": "^24.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

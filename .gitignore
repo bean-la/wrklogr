@@ -5,3 +5,8 @@ reports/
 _ignore/
 .DS_Store
 .playwright-mcp/
+
+# local
+.cursor/
+bin/
+tools/invoice-pdf/node_modules/

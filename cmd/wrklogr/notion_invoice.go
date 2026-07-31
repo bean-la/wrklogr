@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bean-la/wrklogr/internal/config"
+	"github.com/bean-la/wrklogr/internal/invoicesnapshot"
 	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/localgit"
 	"github.com/bean-la/wrklogr/internal/noko"
@@ -84,6 +85,9 @@ type notionInvoiceOpts struct {
 	DryRun        bool
 	SilentFetch   bool
 	DescOverride  string
+	AttachPDF        bool
+	NoSnapshot       bool
+	DescriptionOnly  bool
 }
 
 type notionInvoiceFetchOpts struct {
@@ -118,7 +122,7 @@ func resolveNotionAPIToken(cfg *config.RuntimeConfig, notionFlag string) string 
 }
 
 func notionInvoiceFlagChanged(cmd *cobra.Command) bool {
-	names := []string{"update", "invoice-number", "since", "until", "author", "repo", "dry-run", "local-path", "notion-token", "token"}
+	names := []string{"update", "invoice-number", "since", "until", "author", "repo", "dry-run", "local-path", "notion-token", "token", "attach-pdf"}
 	for _, name := range names {
 		if cmd.Flags().Changed(name) {
 			return true
@@ -330,6 +334,77 @@ func collectCreateInvoiceLines(
 	return out
 }
 
+func mergeProjectAggs(aggs map[int]*projectAgg) *projectAgg {
+	merged := &projectAgg{
+		Repos:   make(map[string]struct{}),
+		msgSeen: make(map[string]struct{}),
+	}
+	for _, a := range aggs {
+		merged.Minutes += a.Minutes
+		for r := range a.Repos {
+			merged.Repos[r] = struct{}{}
+		}
+		for _, m := range a.Msgs {
+			if _, seen := merged.msgSeen[m]; !seen {
+				merged.msgSeen[m] = struct{}{}
+				merged.Msgs = append(merged.Msgs, m)
+			}
+		}
+		merged.NokoDescs = append(merged.NokoDescs, a.NokoDescs...)
+	}
+	return merged
+}
+
+// resolveUpdateAgg picks session/Noko data for an update. When the invoice Client is set,
+// only that client's Noko project is used — never all projects.
+func resolveUpdateAgg(client *notion.ClientRecord, aggs map[int]*projectAgg) *projectAgg {
+	if client != nil && client.NokoProjectID != 0 {
+		if agg, ok := aggs[client.NokoProjectID]; ok {
+			return agg
+		}
+		return &projectAgg{
+			Repos:   make(map[string]struct{}),
+			msgSeen: make(map[string]struct{}),
+		}
+	}
+	switch len(aggs) {
+	case 0:
+		return &projectAgg{
+			Repos:   make(map[string]struct{}),
+			msgSeen: make(map[string]struct{}),
+		}
+	case 1:
+		for _, a := range aggs {
+			return a
+		}
+	}
+	fmt.Fprintf(os.Stderr, "warn: invoice has no Client on page — combining %d projects; link Client in Notion or pass --repo\n", len(aggs))
+	return mergeProjectAggs(aggs)
+}
+
+func fetchNokoDescsForProject(ctx context.Context, projectID int, billedFrom, billedTo string) []string {
+	if projectID == 0 {
+		return nil
+	}
+	nokoToken := strings.TrimSpace(os.Getenv("NOKO_TOKEN"))
+	if nokoToken == "" {
+		return nil
+	}
+	nokoClient := noko.NewClient(nokoToken, nil)
+	entries, err := nokoClient.ListEntries(ctx, billedFrom, billedTo, nil, []int{projectID})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: fetch noko entries for project %d: %v\n", projectID, err)
+		return nil
+	}
+	var descs []string
+	for _, e := range entries {
+		if d := strings.TrimSpace(e.Description); d != "" {
+			descs = append(descs, d)
+		}
+	}
+	return descs
+}
+
 func collectUpdateInvoiceLine(
 	ctx context.Context,
 	nc *notion.Client,
@@ -358,30 +433,13 @@ func collectUpdateInvoiceLine(
 		if err != nil {
 			return nil, fmt.Errorf("get client page for %s: %w", invoiceNumber, err)
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "warn: invoice %s has no Client relation in Notion — link the client page to scope description and PDF entries\n", invoiceNumber)
 	}
 
-	var agg *projectAgg
-	if client != nil && client.NokoProjectID != 0 {
-		agg = aggs[client.NokoProjectID]
-	}
-	if agg == nil {
-		agg = &projectAgg{
-			Repos:   make(map[string]struct{}),
-			msgSeen: make(map[string]struct{}),
-		}
-		for _, a := range aggs {
-			agg.Minutes += a.Minutes
-			for r := range a.Repos {
-				agg.Repos[r] = struct{}{}
-			}
-			for _, m := range a.Msgs {
-				if _, seen := agg.msgSeen[m]; !seen {
-					agg.msgSeen[m] = struct{}{}
-					agg.Msgs = append(agg.Msgs, m)
-				}
-			}
-			agg.NokoDescs = append(agg.NokoDescs, a.NokoDescs...)
-		}
+	agg := resolveUpdateAgg(client, aggs)
+	if client != nil && client.NokoProjectID != 0 && len(agg.NokoDescs) == 0 {
+		agg.NokoDescs = fetchNokoDescsForProject(ctx, client.NokoProjectID, billedFrom, billedTo)
 	}
 
 	hours := float64(agg.Minutes) / 60.0
@@ -431,12 +489,16 @@ func collectUpdateInvoiceLine(
 	}, nil
 }
 
-func writeCreateInvoices(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, dryRun bool, lines []invoiceLine) error {
+func writeCreateInvoices(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, dryRun, attachPDF bool, snap invoiceSnapshotOpts, lines []invoiceLine) error {
 	for _, line := range lines {
 		if dryRun {
 			printInvoiceSummary(cmd, line.ClientName, line.InvoiceNumber, line.Amount, line.Hours, line.Rate, line.Role, line.BilledFrom, line.BilledTo, line.NET, line.NetDays, line.Repos, line.NokoDescs, line.Desc)
+			if attachPDF {
+				fmt.Fprintf(cmd.OutOrStdout(), "  [dry-run] would generate PDF locally and attach to Notion\n")
+			}
 			continue
 		}
+		saveInvoiceSnapshot(cmd.OutOrStdout(), cfg, nc, ctx, snap, "create", &line, nil)
 		inv := notion.InvoiceRequest{
 			InvoiceNumber: line.InvoiceNumber,
 			Amount:        line.Amount,
@@ -453,30 +515,54 @@ func writeCreateInvoices(cmd *cobra.Command, ctx context.Context, nc *notion.Cli
 		}
 		url := notionPublicPageURL(pageID)
 		fmt.Fprintf(cmd.OutOrStdout(), "created invoice for %s: %s amount=$%.2f\n", line.ClientName, url, line.Amount)
+		if attachPDF {
+			line.TargetPageID = pageID
+			if err := attachInvoicePDF(cmd, cfg, nc, pageID, line.InvoiceNumber, false, snap); err != nil {
+				return fmt.Errorf("attach pdf for %s: %w", line.ClientName, err)
+			}
+		}
 	}
 	return nil
 }
 
-func writeUpdateInvoice(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, invoiceNumber string, dryRun bool, line *invoiceLine) error {
+func writeUpdateInvoice(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, invoiceNumber string, dryRun, attachPDF, descriptionOnly bool, snap invoiceSnapshotOpts, line *invoiceLine) error {
 	if dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(), "[update] %s\n", invoiceNumber)
 		printInvoiceSummary(cmd, line.ClientName, line.InvoiceNumber, line.Amount, line.Hours, line.Rate, line.Role, line.BilledFrom, line.BilledTo, line.NET, line.NetDays, line.Repos, line.NokoDescs, line.Desc)
+		if attachPDF {
+			return attachInvoicePDF(cmd, cfg, nc, line.TargetPageID, invoiceNumber, true, snap)
+		}
 		return nil
 	}
 
-	inv := notion.InvoiceRequest{
-		Amount:      line.Amount,
-		BilledFrom:  line.BilledFrom,
-		BilledTo:    line.BilledTo,
-		Description: line.Desc,
-		NET:         line.NET,
-		NetDays:     line.NetDays,
+	saveInvoiceSnapshot(cmd.OutOrStdout(), cfg, nc, ctx, snap, "update", line, nil)
+
+	if descriptionOnly {
+		if err := nc.UpdateInvoiceDescription(ctx, line.TargetPageID, line.Desc); err != nil {
+			return fmt.Errorf("update description for %s: %w", invoiceNumber, err)
+		}
+		url := notionPublicPageURL(line.TargetPageID)
+		fmt.Fprintf(cmd.OutOrStdout(), "updated description for %s (%s): %s\n", invoiceNumber, line.ClientName, url)
+	} else {
+		inv := notion.InvoiceRequest{
+			Amount:      line.Amount,
+			BilledFrom:  line.BilledFrom,
+			BilledTo:    line.BilledTo,
+			Description: line.Desc,
+			NET:         line.NET,
+			NetDays:     line.NetDays,
+		}
+		if err := nc.UpdateInvoice(ctx, line.TargetPageID, inv); err != nil {
+			return fmt.Errorf("update invoice %s: %w", invoiceNumber, err)
+		}
+		url := notionPublicPageURL(line.TargetPageID)
+		fmt.Fprintf(cmd.OutOrStdout(), "updated %s (%s): %s amount=$%.2f\n", invoiceNumber, line.ClientName, url, line.Amount)
 	}
-	if err := nc.UpdateInvoice(ctx, line.TargetPageID, inv); err != nil {
-		return fmt.Errorf("update invoice %s: %w", invoiceNumber, err)
+	if attachPDF {
+		if err := attachInvoicePDF(cmd, cfg, nc, line.TargetPageID, invoiceNumber, false, snap); err != nil {
+			return fmt.Errorf("attach pdf: %w", err)
+		}
 	}
-	url := notionPublicPageURL(line.TargetPageID)
-	fmt.Fprintf(cmd.OutOrStdout(), "updated %s (%s): %s amount=$%.2f\n", invoiceNumber, line.ClientName, url, line.Amount)
 	return nil
 }
 
@@ -506,7 +592,7 @@ func executeNotionInvoice(cmd *cobra.Command, cfg *config.RuntimeConfig, opts no
 	if err != nil {
 		return err
 	}
-	if len(fetched.Aggs) == 0 {
+	if len(fetched.Aggs) == 0 && !(opts.Update && opts.DescriptionOnly) {
 		fmt.Fprintln(cmd.OutOrStdout(), "no sessions found for the given date range")
 		return nil
 	}
@@ -518,16 +604,31 @@ func executeNotionInvoice(cmd *cobra.Command, cfg *config.RuntimeConfig, opts no
 		role = "backend"
 	}
 
+	snap := invoiceSnapshotOpts{
+		Enabled: !opts.NoSnapshot && !opts.DryRun,
+		Fetched: fetched,
+		FetchMeta: invoicesnapshot.FetchMeta{
+			Since:        opts.SinceInput,
+			Until:        opts.UntilInput,
+			BilledFrom:   fetched.BilledFrom,
+			BilledTo:     fetched.BilledTo,
+			MonthLabel:   fetched.MonthLabel,
+			Author:       opts.Author,
+			RepoPatterns: opts.RepoPatterns,
+			LocalPaths:   opts.LocalPaths,
+		},
+	}
+
 	if opts.Update {
 		line, collErr := collectUpdateInvoiceLine(ctx, nc, cfg, opts.InvoiceNumber, role, fetched.Aggs, fetched.BilledFrom, fetched.BilledTo, fetched.MonthLabel, fetched.LLMClient, opts.DescOverride)
 		if collErr != nil {
 			return collErr
 		}
-		return writeUpdateInvoice(cmd, ctx, nc, cfg, opts.InvoiceNumber, opts.DryRun, line)
+		return writeUpdateInvoice(cmd, ctx, nc, cfg, opts.InvoiceNumber, opts.DryRun, opts.AttachPDF, opts.DescriptionOnly, snap, line)
 	}
 
 	lines := collectCreateInvoiceLines(ctx, nc, cfg, opts.InvoiceNumber, role, fetched.Aggs, fetched.BilledFrom, fetched.BilledTo, fetched.MonthLabel, fetched.LLMClient, opts.DescOverride)
-	return writeCreateInvoices(cmd, ctx, nc, cfg, opts.DryRun, lines)
+	return writeCreateInvoices(cmd, ctx, nc, cfg, opts.DryRun, opts.AttachPDF, snap, lines)
 }
 
 func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Command {
@@ -541,6 +642,10 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	var update bool
 	var author string
 	var repoPatterns []string
+	var attachPDF bool
+	var noSnapshot bool
+	var descriptionOnly bool
+	var descOverride string
 
 	cmd := &cobra.Command{
 		Use:   "notion-invoice",
@@ -568,6 +673,10 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				NotionToken:   notionToken,
 				DryRun:        dryRun,
 				SilentFetch:   false,
+				AttachPDF:     attachPDF,
+				NoSnapshot:       noSnapshot,
+				DescriptionOnly:  descriptionOnly,
+				DescOverride:     descOverride,
 			})
 		},
 	}
@@ -583,6 +692,8 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 		},
 	}
 	cmd.AddCommand(wizardCmd)
+	cmd.AddCommand(newNotionInvoiceAttachPDFCmd(getConfig))
+	cmd.AddCommand(newNotionInvoicePrintPDFCmd(getConfig))
 
 	cmd.Flags().StringVar(&author, "author", "", "Only include commits by this author (GitHub login for API mode, name for local mode)")
 	cmd.Flags().StringSliceVar(&repoPatterns, "repo", nil, "Only include sessions touching repos matching these glob patterns (e.g. 'Third-Eye-Tarot/*')")
@@ -594,6 +705,10 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be created without writing to Notion")
 	cmd.Flags().StringVar(&notionToken, "notion-token", "", "Notion API token (defaults to NOTION_TOKEN env or notion.api_token in config)")
+	cmd.Flags().BoolVar(&attachPDF, "attach-pdf", false, "Attach invoice PDF from bean-invoicing after create/update")
+	cmd.PersistentFlags().BoolVar(&noSnapshot, "no-snapshot", false, "Skip saving invoice backup snapshots to disk")
+	cmd.Flags().BoolVar(&descriptionOnly, "description-only", false, "Update only Description (keep Amount and dates unchanged)")
+	cmd.Flags().StringVar(&descOverride, "description", "", "Use this description text instead of generating one")
 
 	return cmd
 }
@@ -649,8 +764,10 @@ func filterDaysByRepo(days []session.DaySummary, patterns []string) []session.Da
 				}
 			}
 			if len(commits) > 0 {
-				sess.Commits = commits
-				sessions = append(sessions, sess)
+				rebuilt, ok := session.SessionFromCommits(commits)
+				if ok {
+					sessions = append(sessions, rebuilt)
+				}
 			}
 		}
 		if len(sessions) > 0 {

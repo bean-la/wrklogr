@@ -42,6 +42,12 @@ type NotionConfig struct {
 	Role        string  `toml:"role"`
 	// DefaultRate is used when the client's rate for the configured role is unset in Notion.
 	DefaultRate float64 `toml:"default_rate"`
+	// InvoicingURL is the bean-invoicing web app base URL used to render invoice PDFs.
+	InvoicingURL string `toml:"invoicing_url"`
+	// InvoicingKey is an optional access key query param for the invoicing app (?key=).
+	InvoicingKey string `toml:"invoicing_key"`
+	// InvoiceSnapshotDir stores JSON backups before invoice writes (env: WRKLOGR_INVOICE_SNAPSHOT_DIR).
+	InvoiceSnapshotDir string `toml:"invoice_snapshot_dir"`
 }
 
 type NokoConfig struct {

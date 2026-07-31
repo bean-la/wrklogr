@@ -108,6 +108,16 @@ The update patches **Amount, Billed Dates, Description, Net, Net Days** only. In
 
 Rate and NET terms are resolved from the client already linked on the Notion page — no extra config needed.
 
+**Important:** Link the **Client** relation on the invoice page before updating. Without it, wrklogr merges git/Noko data from every project in the date range into the description.
+
+To refresh only the description (after you have set Amount / Total Override manually):
+
+```bash
+wrklogr notion-invoice --update --invoice-number ADV-806 \
+  --since 2026-04-01 --until 2026-04-30 \
+  --description-only --attach-pdf
+```
+
 ---
 
 ## Multiple repos for one client
@@ -134,6 +144,55 @@ wrklogr notion-invoice \
   --since 2026-03-15 --until 2026-04-15 \
   --local-path ~/dev/client-repo
 ```
+
+---
+
+## Attach invoice PDF
+
+After amounts are correct, generate and attach the invoice PDF locally (Puppeteer + bean-invoicing UI):
+
+```bash
+# With create/update
+wrklogr notion-invoice --update --invoice-number ADV-805 --attach-pdf ...
+
+# PDF only (invoice already updated)
+wrklogr notion-invoice attach-pdf --invoice-number ADV-805
+
+# PDF to disk only
+wrklogr notion-invoice print-pdf --invoice-number ADV-805 -o ADV-805.pdf
+```
+
+**Setup:** `./install.sh` runs `npm install` in `tools/invoice-pdf`. You need Node.js 18+ and Puppeteer’s Chromium deps.
+
+Rendering uses the bean-invoicing **web UI** at `invoicing_url` (Heroku by default, or a local `_ext/bean-invoicing-web` dev server with API). wrklogr does not call the Heroku `.pdf` endpoint anymore — it runs `tools/invoice-pdf/print.mjs` and uploads the bytes to Notion.
+
+Optional `wrklogr.toml`:
+
+```toml
+[notion]
+invoicing_url = "https://bean-invoicing.herokuapp.com"
+invoicing_key = "your-access-key"
+```
+
+Or env: `BEAN_INVOICING_URL`, `BEAN_INVOICING_KEY`. Set `WRKLOGR_ROOT` if you run wrklogr outside the repo checkout.
+
+---
+
+## Invoice snapshots (backup)
+
+Before any Notion **update**, **create**, or **attach-pdf**, wrklogr saves a timestamped backup under `~/.wrklogr/invoice-snapshots/` (override with `invoice_snapshot_dir` in config or `WRKLOGR_INVOICE_SNAPSHOT_DIR`).
+
+Each snapshot folder contains:
+
+| File | Contents |
+|------|----------|
+| `meta.json` | Action, timestamp, invoice number, page id |
+| `notion-before.json` | Full Notion page JSON before the write |
+| `proposed.json` | Amount, hours, description, dates wrklogr computed |
+| `projects.json` | Per–Noko-project minutes, repos, commit messages |
+| `invoice.pdf` | PDF bytes (attach-pdf only) |
+
+Use `--no-snapshot` to skip. Snapshots are not written for `--dry-run`.
 
 ---
 

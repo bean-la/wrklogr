@@ -31,6 +31,22 @@ func TestBuildClustersAcrossReposWithGapAndCeil(t *testing.T) {
 	}
 }
 
+func TestSessionFromCommitsFuzzySpan(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	sess, ok := SessionFromCommits([]Commit{
+		{Repo: "org/a", SHA: "1", Timestamp: base},
+		{Repo: "org/b", SHA: "2", Timestamp: base.Add(90 * time.Minute)},
+	})
+	if !ok {
+		t.Fatal("expected session")
+	}
+	if sess.FuzzyHours != 2 {
+		t.Fatalf("expected 2 fuzzy hours, got %d", sess.FuzzyHours)
+	}
+}
+
 func TestBucketByDayUsesConfiguredTimezone(t *testing.T) {
 	t.Parallel()
 

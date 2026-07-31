@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/bean-la/wrklogr/internal/config"
+	"github.com/bean-la/wrklogr/internal/invoicesnapshot"
 	"github.com/bean-la/wrklogr/internal/notion"
 	"github.com/spf13/cobra"
 )
@@ -260,10 +261,26 @@ func runNotionInvoiceWizard(cmd *cobra.Command, getConfig func() (*config.Runtim
 		return nil
 	}
 
-	if updateMode {
-		return writeUpdateInvoice(cmd, ctx, nc, cfg, invoiceNumber, false, updateLine)
+	attachPDF := promptYesNo(cmd, sc, "Attach invoice PDF from bean-invoicing?", true)
+
+	snap := invoiceSnapshotOpts{
+		Enabled: !snapshotDisabled(cmd),
+		Fetched: fetched,
+		FetchMeta: invoicesnapshot.FetchMeta{
+			Since:        sinceInput,
+			Until:        untilInput,
+			BilledFrom:   fetched.BilledFrom,
+			BilledTo:     fetched.BilledTo,
+			MonthLabel:   fetched.MonthLabel,
+			Author:       author,
+			RepoPatterns: repoPatterns,
+		},
 	}
-	return writeCreateInvoices(cmd, ctx, nc, cfg, false, lines)
+
+	if updateMode {
+		return writeUpdateInvoice(cmd, ctx, nc, cfg, invoiceNumber, false, attachPDF, false, snap, updateLine)
+	}
+	return writeCreateInvoices(cmd, ctx, nc, cfg, false, attachPDF, snap, lines)
 }
 
 func wizardFinalSummaryLine(line invoiceLine) string {
