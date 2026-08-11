@@ -28,6 +28,7 @@ type ProposedInvoice struct {
 	Amount        float64  `json:"amount"`
 	Hours         float64  `json:"hours"`
 	Rate          float64  `json:"rate"`
+	RateIsDaily   bool     `json:"rate_is_daily,omitempty"`
 	Role          string   `json:"role"`
 	BilledFrom    string   `json:"billed_from"`
 	BilledTo      string   `json:"billed_to"`

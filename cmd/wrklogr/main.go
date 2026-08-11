@@ -315,6 +315,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 							Repo:      repoLabel,
 							SHA:       c.SHA,
 							Message:   c.Subject,
+							Author:    c.AuthorEmail,
 							Timestamp: ts,
 						})
 						filtered++
@@ -564,6 +565,7 @@ func normalizeCommit(repo string, c *gh.RepositoryCommit) (session.Commit, bool)
 		Repo:      repo,
 		SHA:       c.GetSHA(),
 		Message:   c.Commit.GetMessage(),
+		Author:    c.Commit.GetAuthor().GetEmail(),
 		Timestamp: timestamp,
 	}, true
 }

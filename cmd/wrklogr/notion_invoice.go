@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bean-la/wrklogr/internal/config"
+	"github.com/bean-la/wrklogr/internal/gcal"
 	"github.com/bean-la/wrklogr/internal/invoicesnapshot"
 	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/localgit"
@@ -84,6 +85,7 @@ type notionInvoiceOpts struct {
 	NotionToken   string
 	DryRun        bool
 	SilentFetch   bool
+	Gcal             bool
 	DescOverride  string
 	AttachPDF        bool
 	NoSnapshot       bool
@@ -98,6 +100,7 @@ type notionInvoiceFetchOpts struct {
 	LocalPaths    []string
 	GithubToken   string
 	SilentFetch   bool
+	Gcal          bool
 }
 
 type notionInvoiceFetched struct {
@@ -122,7 +125,7 @@ func resolveNotionAPIToken(cfg *config.RuntimeConfig, notionFlag string) string 
 }
 
 func notionInvoiceFlagChanged(cmd *cobra.Command) bool {
-	names := []string{"update", "invoice-number", "since", "until", "author", "repo", "dry-run", "local-path", "notion-token", "token", "attach-pdf"}
+	names := []string{"update", "invoice-number", "since", "until", "author", "repo", "dry-run", "local-path", "notion-token", "token", "attach-pdf", "gcal"}
 	for _, name := range names {
 		if cmd.Flags().Changed(name) {
 			return true
@@ -139,6 +142,67 @@ func notionPublicPageURL(pageID string) string {
 	return "https://www.notion.so/" + s
 }
 
+// mergeGcalEvents merges the configured calendar's events in [since, until] into
+// the day summaries as billable sessions (G012 gcal fix — meetings were missing
+// from all invoices). Follows the report_core.go pattern but creates a new day
+// when an event falls on a day with no commits, so meetings aren't dropped.
+func mergeGcalEvents(out io.Writer, cfg *config.RuntimeConfig, days []session.DaySummary, since, until time.Time) []session.DaySummary {
+	if cfg.GCal == nil || strings.TrimSpace(cfg.GCal.Calendar) == "" {
+		return days
+	}
+	events, err := gcal.FetchEvents(cfg.GCal.Calendar, since, until)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "calendar fetch: %v\n", err)
+		return days
+	}
+	if len(events) == 0 {
+		return days
+	}
+	if out != nil {
+		fmt.Fprintf(out, "calendar: %d events\n", len(events))
+	}
+	dayMap := make(map[string]*session.DaySummary, len(days)+8)
+	for i := range days {
+		dayMap[days[i].Day] = &days[i]
+	}
+	var appended []*session.DaySummary
+	for _, ev := range events {
+		dayKey := ev.Start.Format("2006-01-02")
+		minutes := int(ev.Length.Minutes())
+		if minutes < 1 {
+			minutes = 1
+		}
+		fuzzyHours := (minutes + 59) / 60
+		sess := session.Session{
+			Commits: []session.Commit{{
+				Repo:      "📅 " + ev.Title,
+				Message:   ev.Title,
+				Timestamp: ev.Start,
+			}},
+			Start:      ev.Start,
+			End:        ev.End,
+			FuzzyHours: fuzzyHours,
+		}
+		ds, ok := dayMap[dayKey]
+		if !ok {
+			ds = &session.DaySummary{Day: dayKey}
+			dayMap[dayKey] = ds
+			appended = append(appended, ds)
+		}
+		ds.Sessions = append(ds.Sessions, sess)
+		ds.TotalHours += fuzzyHours
+	}
+	if len(appended) == 0 {
+		return days
+	}
+	all := append([]session.DaySummary(nil), days...)
+	for _, d := range appended {
+		all = append(all, *d)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Day < all[j].Day })
+	return all
+}
+
 func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.RuntimeConfig, opts notionInvoiceFetchOpts) (*notionInvoiceFetched, error) {
 	since, until, err := resolveBillingRange(opts.SinceInput, opts.UntilInput)
 	if err != nil {
@@ -149,7 +213,27 @@ func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.R
 
 	if len(opts.LocalPaths) > 0 {
 		var merged []session.Commit
-		for _, p := range opts.LocalPaths {
+		paths := opts.LocalPaths
+		// Discover git submodules so a top-level -meta path also bills the
+		// sub-repos (brodie-meta → shopbrodie-shopify + brodie-portal). G012
+		// operator: ALL submodules should bill.
+		if discovered, derr := discoverGitRepositories(paths, 3); derr == nil && len(discovered) > 0 {
+			seen := map[string]struct{}{}
+			for _, p := range paths {
+				if abs, aerr := filepath.Abs(p); aerr == nil {
+					seen[abs] = struct{}{}
+				}
+			}
+			for _, d := range discovered {
+				if abs, aerr := filepath.Abs(d); aerr == nil {
+					if _, exists := seen[abs]; !exists {
+						seen[abs] = struct{}{}
+						paths = append(paths, d)
+					}
+				}
+			}
+		}
+		for _, p := range paths {
 			commits, scanErr := localgit.ListCommits(p, &since, &until)
 			if scanErr != nil {
 				return nil, fmt.Errorf("git log %s: %w", p, scanErr)
@@ -157,6 +241,10 @@ func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.R
 			label := filepath.Base(p)
 			for _, c := range commits {
 				if opts.Author != "" && !strings.EqualFold(c.AuthorName, opts.Author) {
+					continue
+				}
+				// Billing policy: exclude client dev (nphillips) + shopify[bot].
+				if !session.IsBillableAuthor(c.AuthorEmail) {
 					continue
 				}
 				ts := c.AuthorDate
@@ -170,6 +258,7 @@ func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.R
 					Repo:      label,
 					SHA:       c.SHA,
 					Message:   c.Subject,
+					Author:    c.AuthorEmail,
 					Timestamp: ts,
 				})
 			}
@@ -211,6 +300,10 @@ func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.R
 			return nil, fmt.Errorf("fetch commits: %w", reportErr)
 		}
 		days = result.Days
+	}
+
+	if opts.Gcal {
+		days = mergeGcalEvents(cmd.OutOrStdout(), cfg, days, since, until)
 	}
 
 	if len(opts.RepoPatterns) > 0 {
@@ -588,6 +681,7 @@ func executeNotionInvoice(cmd *cobra.Command, cfg *config.RuntimeConfig, opts no
 		LocalPaths:    opts.LocalPaths,
 		GithubToken:   opts.GithubToken,
 		SilentFetch:   opts.SilentFetch,
+		Gcal:          opts.Gcal,
 	})
 	if err != nil {
 		return err
@@ -646,6 +740,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	var noSnapshot bool
 	var descriptionOnly bool
 	var descOverride string
+	var gcalFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "notion-invoice",
@@ -677,6 +772,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				NoSnapshot:       noSnapshot,
 				DescriptionOnly:  descriptionOnly,
 				DescOverride:     descOverride,
+				Gcal:             gcalFlag,
 			})
 		},
 	}
@@ -709,6 +805,7 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	cmd.PersistentFlags().BoolVar(&noSnapshot, "no-snapshot", false, "Skip saving invoice backup snapshots to disk")
 	cmd.Flags().BoolVar(&descriptionOnly, "description-only", false, "Update only Description (keep Amount and dates unchanged)")
 	cmd.Flags().StringVar(&descOverride, "description", "", "Use this description text instead of generating one")
+	cmd.Flags().BoolVar(&gcalFlag, "gcal", false, "Include calendar events from the configured gcal calendar as billable sessions")
 
 	return cmd
 }
@@ -781,10 +878,24 @@ func filterDaysByRepo(days []session.DaySummary, patterns []string) []session.Da
 // aggregateByProject totals minutes per Noko project ID across all sessions.
 func aggregateByProject(days []session.DaySummary, nc *config.NokoConfig) map[int]*projectAgg {
 	result := make(map[int]*projectAgg)
+	// gcal sessions carry a repo label like "📅 <title>" that doesn't map to a
+	// Noko project; collect them and attribute to the run's primary project so
+	// meetings count as billable (G012 gcal fix).
+	var gcal []session.Session
 	for _, day := range days {
 		for _, sess := range day.Sessions {
 			repos := getUniqueReposForSession(sess)
 			groups := groupByProject(repos, nc)
+			nonZero := 0
+			for projID := range groups {
+				if projID != 0 {
+					nonZero++
+				}
+			}
+			if nonZero == 0 {
+				gcal = append(gcal, sess)
+				continue
+			}
 			minutesPerGroup := sess.FuzzyHours * 60 / len(groups)
 			if minutesPerGroup < 1 {
 				minutesPerGroup = 1
@@ -806,7 +917,47 @@ func aggregateByProject(days []session.DaySummary, nc *config.NokoConfig) map[in
 			}
 		}
 	}
+	if len(gcal) > 0 {
+		if primary := primaryProject(result); primary != 0 {
+			agg := result[primary]
+			projRepos := reposForProject(nc, primary)
+			for _, sess := range gcal {
+				minutes := sess.FuzzyHours * 60
+				if minutes < 1 {
+					minutes = 1
+				}
+				agg.Minutes += minutes
+				agg.addSession(sess, projRepos)
+			}
+		}
+	}
 	return result
+}
+
+// primaryProject returns the Noko project ID with the most attributed minutes
+// (used as the target for gcal meeting attribution in a per-client invoice run).
+func primaryProject(result map[int]*projectAgg) int {
+	best, bestMin := 0, -1
+	for id, a := range result {
+		if a.Minutes > bestMin {
+			best, bestMin = id, a.Minutes
+		}
+	}
+	return best
+}
+
+// reposForProject returns the repo labels mapped to a Noko project id.
+func reposForProject(nc *config.NokoConfig, projectID int) []string {
+	var out []string
+	if nc != nil && nc.RepoProjects != nil {
+		for repo, rp := range nc.RepoProjects {
+			if rp.ProjectID == projectID {
+				out = append(out, repo)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sortedRepos(agg *projectAgg) []string {
@@ -821,7 +972,7 @@ func sortedRepos(agg *projectAgg) []string {
 func printInvoiceSummary(cmd *cobra.Command, clientName, number string, amount, hours, rate float64, role, from, to, net string, netDays int, repos []string, nokoDescs []string, desc string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "─── %s ───\n", clientName)
 	fmt.Fprintf(cmd.OutOrStdout(), "  number:  %s\n", number)
-	fmt.Fprintf(cmd.OutOrStdout(), "  amount:  $%.2f (%.2fh × $%.0f %s)\n", amount, hours, rate, role)
+	fmt.Fprintf(cmd.OutOrStdout(), "  amount:  $%.2f (%.1f days × $%.0f/day %s)\n", amount, hours/8.0, rate, role)
 	fmt.Fprintf(cmd.OutOrStdout(), "  dates:   %s → %s\n", from, to)
 	fmt.Fprintf(cmd.OutOrStdout(), "  net:     %s (%d days)\n", net, netDays)
 	fmt.Fprintf(cmd.OutOrStdout(), "  repos:   %s\n", strings.Join(repos, ", "))

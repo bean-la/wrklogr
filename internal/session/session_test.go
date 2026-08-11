@@ -80,3 +80,58 @@ func TestBucketByDayUsesConfiguredTimezone(t *testing.T) {
 		t.Fatalf("expected second bucket 2026-01-02, got %q", days[1].Day)
 	}
 }
+
+func TestBuildNeverMergesAcrossAuthors(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.June, 1, 9, 0, 0, 0, time.UTC)
+	// Two commits close in time but from different authors must NOT merge
+	// into one session (client dev time billed to us — G012 author bug).
+	commits := []Commit{
+		{Repo: "brodie", SHA: "1", Author: "seb@bean.la", Timestamp: base},
+		{Repo: "brodie", SHA: "2", Author: "nick@nphillips.com", Timestamp: base.Add(30 * time.Minute)},
+		{Repo: "brodie", SHA: "3", Author: "seb@bean.la", Timestamp: base.Add(3 * time.Hour)},
+	}
+
+	sessions := Build(commits, 4*time.Hour) // gap wide enough to merge if not for author boundary
+	if len(sessions) != 3 {
+		t.Fatalf("expected 3 sessions (author-boundary split), got %d", len(sessions))
+	}
+	for i, s := range sessions {
+		if len(s.Commits) != 1 {
+			t.Fatalf("session %d expected 1 commit (own author), got %d", i, len(s.Commits))
+		}
+	}
+}
+
+func TestBuildMergesSameAuthorWithinGap(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, time.June, 2, 9, 0, 0, 0, time.UTC)
+	commits := []Commit{
+		{Repo: "brodie", SHA: "1", Author: "seb@bean.la", Timestamp: base},
+		{Repo: "brodie", SHA: "2", Author: "seb@bean.la", Timestamp: base.Add(30 * time.Minute)},
+	}
+	sessions := Build(commits, 2*time.Hour)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session (same author merges), got %d", len(sessions))
+	}
+}
+
+func TestIsBillableAuthor(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]bool{
+		"seb@bean.la":                     true,
+		"seb@bean.studio":                 true,
+		"bean-la@users.noreply.github.com": true,
+		"nick@nphillips.com":              false,
+		"79544226+shopify[bot]@users.noreply.github.com": false,
+		"":                                true,
+	}
+	for author, want := range cases {
+		if got := IsBillableAuthor(author); got != want {
+			t.Errorf("IsBillableAuthor(%q) = %v, want %v", author, got, want)
+		}
+	}
+}

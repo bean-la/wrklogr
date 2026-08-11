@@ -3,6 +3,7 @@ package session
 import (
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -10,7 +11,23 @@ type Commit struct {
 	Repo      string
 	SHA       string
 	Message   string
+	Author    string // author email (or name) — used to never merge across authors
 	Timestamp time.Time
+}
+
+// IsBillableAuthor reports whether a commit's author should be billed.
+// Billing policy: bill seb + herm agents; EXCLUDE client dev + shopify bots.
+// Matches on author email/name; unknown/empty authors are kept (don't silently
+// drop commits that lack author metadata).
+func IsBillableAuthor(author string) bool {
+	a := strings.ToLower(strings.TrimSpace(author))
+	if a == "" {
+		return true
+	}
+	if strings.Contains(a, "nphillips") || strings.Contains(a, "shopify") {
+		return false
+	}
+	return true
 }
 
 type Session struct {
@@ -51,7 +68,12 @@ func Build(commits []Commit, sessionGap time.Duration) []Session {
 	for i := 1; i < len(sorted); i++ {
 		prev := sorted[i-1]
 		next := sorted[i]
-		if next.Timestamp.Sub(prev.Timestamp) > sessionGap {
+		// Never merge across different authors (billing correctness — two
+		// people's commits within the gap must not become one session billed
+		// to the client). Empty author (not populated) is treated as the same
+		// author so unannotated commits still merge by time.
+		sameAuthor := prev.Author == next.Author || prev.Author == "" || next.Author == ""
+		if next.Timestamp.Sub(prev.Timestamp) > sessionGap || !sameAuthor {
 			out = append(out, makeSession(current))
 			current = []Commit{next}
 			continue

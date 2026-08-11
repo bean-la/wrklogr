@@ -28,6 +28,7 @@ func proposedFromLine(line *invoiceLine) *invoicesnapshot.ProposedInvoice {
 		Amount:        line.Amount,
 		Hours:         line.Hours,
 		Rate:          line.Rate,
+		RateIsDaily:   true, // ADV-800: rate is per-day ($/day), not per-hour
 		Role:          line.Role,
 		BilledFrom:    line.BilledFrom,
 		BilledTo:      line.BilledTo,
