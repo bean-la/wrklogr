@@ -24,7 +24,9 @@ type Config struct {
 }
 
 type GCalConfig struct {
-	Calendar string `toml:"calendar"`
+	Calendar string   `toml:"calendar"`
+	Attendee string   `toml:"attendee"`
+	Keywords []string `toml:"keywords"`
 }
 
 type LLMConfig struct {

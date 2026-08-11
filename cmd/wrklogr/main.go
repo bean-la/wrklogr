@@ -332,9 +332,12 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					return fmt.Errorf("no repositories configured; set repos in wrklogr.toml or use --repos")
 				}
 
-				gcalCal := ""
+				gcalCal, gcalAttendee := "", ""
+				var gcalKeywords []string
 				if cfg.GCal != nil {
 					gcalCal = cfg.GCal.Calendar
+					gcalAttendee = cfg.GCal.Attendee
+					gcalKeywords = cfg.GCal.Keywords
 				}
 
 				var meAuthor string
@@ -372,6 +375,8 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					Timezone:      reportTZ,
 					GCalFlag:      gcalFlag,
 					GCalCalendar:  gcalCal,
+					GCalAttendee:  gcalAttendee,
+					GCalKeywords:  gcalKeywords,
 					NokoDryRun:    nokoDryRun,
 					NokoPush:      pushNoko,
 					NokoToken:     nokoToken,

@@ -18,7 +18,7 @@ type Event struct {
 	Length time.Duration
 }
 
-func FetchEvents(calendarID string, since, until time.Time) ([]Event, error) {
+func FetchEvents(calendarID string, since, until time.Time, requiredAttendee string, keywords []string) ([]Event, error) {
 	if calendarID == "" {
 		return nil, fmt.Errorf("calendar ID is required")
 	}
@@ -40,17 +40,19 @@ func FetchEvents(calendarID string, since, until time.Time) ([]Event, error) {
 		return nil, fmt.Errorf("read iCal feed: %w", err)
 	}
 
-	return parseICS(string(raw), since, until)
+	return parseICS(string(raw), since, until, requiredAttendee, keywords)
 }
 
-func parseICS(raw string, since, until time.Time) ([]Event, error) {
+func parseICS(raw string, since, until time.Time, requiredAttendee string, keywords []string) ([]Event, error) {
 	events := make([]Event, 0)
 
-	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	unfolded := unfoldICSLines(raw)
+	lines := strings.Split(unfolded, "\n")
 
 	var inEvent bool
 	var title string
 	var dtStart, dtEnd string
+	var hasAttendee bool
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -63,12 +65,19 @@ func parseICS(raw string, since, until time.Time) ([]Event, error) {
 			title = ""
 			dtStart = ""
 			dtEnd = ""
+			hasAttendee = false
 			continue
 		}
 
 		if line == "END:VEVENT" {
 			inEvent = false
 			if title == "" || dtStart == "" {
+				continue
+			}
+			if requiredAttendee != "" && !hasAttendee {
+				continue
+			}
+			if len(keywords) > 0 && !matchesAnyKeyword(title, keywords) {
 				continue
 			}
 
@@ -122,6 +131,13 @@ func parseICS(raw string, since, until time.Time) ([]Event, error) {
 			dtEnd = extractICalValue(line)
 			continue
 		}
+
+		if requiredAttendee != "" && strings.HasPrefix(line, "ATTENDEE") {
+			if strings.Contains(strings.ToLower(line), strings.ToLower(requiredAttendee)) {
+				hasAttendee = true
+			}
+			continue
+		}
 	}
 
 	return events, nil
@@ -154,6 +170,39 @@ func parseICalTime(s string) (time.Time, error) {
 
 	// Date only: 20260425
 	return time.Parse("20060102", s)
+}
+
+// unfoldICSLines joins RFC 5545 line continuations.  ICS lines are folded by
+// inserting CRLF followed by a space or tab after column 75.  This function
+// normalises CRLF→LF, then joins continuation lines so each logical line
+// appears on a single physical line.
+func unfoldICSLines(raw string) string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		// If this line starts with a space or tab, append it to the previous line
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			if len(out) > 0 {
+				out[len(out)-1] += line[1:]
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func matchesAnyKeyword(title string, keywords []string) bool {
+	titleLower := strings.ToLower(title)
+	for _, kw := range keywords {
+		if strings.Contains(titleLower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
 }
 
 func unescapeICalText(s string) string {

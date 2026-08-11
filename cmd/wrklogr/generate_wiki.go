@@ -161,9 +161,12 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 				reportTZ := cfg.Timezone
 				nokoCfg := cfg.Noko
 				llmCfg := resolveLLMConfig(cfg, "", "")
-				gcalCal := ""
+				gcalCal, gcalAttendee := "", ""
+				var gcalKeywords []string
 				if cfg.GCal != nil {
 					gcalCal = cfg.GCal.Calendar
+					gcalAttendee = cfg.GCal.Attendee
+					gcalKeywords = cfg.GCal.Keywords
 				}
 
 				for _, author := range authorsInput {
@@ -178,6 +181,8 @@ noko dry-run, and generate per-author wiki pages with project summaries.`,
 						Timezone:      reportTZ,
 						GCalFlag:      gcalFlag,
 						GCalCalendar:  gcalCal,
+						GCalAttendee:  gcalAttendee,
+						GCalKeywords:  gcalKeywords,
 						NokoDryRun:    nokoDryRun || nokoPush, // accumulate entries; post-process block handles push
 						NokoPush:      false,
 						NokoConfig:    nokoCfg,

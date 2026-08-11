@@ -150,7 +150,7 @@ func mergeGcalEvents(out io.Writer, cfg *config.RuntimeConfig, days []session.Da
 	if cfg.GCal == nil || strings.TrimSpace(cfg.GCal.Calendar) == "" {
 		return days
 	}
-	events, err := gcal.FetchEvents(cfg.GCal.Calendar, since, until)
+	events, err := gcal.FetchEvents(cfg.GCal.Calendar, since, until, cfg.GCal.Attendee, cfg.GCal.Keywords)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "calendar fetch: %v\n", err)
 		return days

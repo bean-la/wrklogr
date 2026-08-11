@@ -24,7 +24,7 @@ END:VCALENDAR`
 	since := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	until := time.Date(2026, 4, 30, 23, 59, 59, 0, time.UTC)
 
-	events, err := parseICS(raw, since, until)
+	events, err := parseICS(raw, since, until, "", nil)
 	if err != nil {
 		t.Fatalf("parseICS returned error: %v", err)
 	}
@@ -63,7 +63,7 @@ END:VCALENDAR`
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	until := time.Date(2026, 3, 31, 23, 59, 59, 0, time.UTC)
 
-	events, err := parseICS(raw, since, until)
+	events, err := parseICS(raw, since, until, "", nil)
 	if err != nil {
 		t.Fatalf("parseICS returned error: %v", err)
 	}
@@ -85,7 +85,7 @@ END:VCALENDAR`
 	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	until := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
 
-	events, err := parseICS(raw, since, until)
+	events, err := parseICS(raw, since, until, "", nil)
 	if err != nil {
 		t.Fatalf("parseICS returned error: %v", err)
 	}

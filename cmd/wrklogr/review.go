@@ -126,11 +126,14 @@ them, shows a dry-run, then pushes to Noko on confirmation.`,
 			days := session.BucketByDay(sessions, reportTZ)
 
 			// --- Fetch GCal events ---
-			var gcalCal string
+			var gcalCal, gcalAttendee string
+			var gcalKeywords []string
 			if cfg.GCal != nil {
 				gcalCal = cfg.GCal.Calendar
+				gcalAttendee = cfg.GCal.Attendee
+				gcalKeywords = cfg.GCal.Keywords
 			}
-			events, err := gcal.FetchEvents(gcalCal, *since, *until)
+			events, err := gcal.FetchEvents(gcalCal, *since, *until, gcalAttendee, gcalKeywords)
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "calendar: error — %v\n", err)
 			} else {

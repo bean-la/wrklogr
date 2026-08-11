@@ -32,6 +32,8 @@ type reportOpts struct {
 	Timezone      *time.Location
 	GCalFlag      bool
 	GCalCalendar  string
+	GCalAttendee  string
+	GCalKeywords  []string
 	NokoDryRun    bool
 	NokoPush      bool
 	NokoToken     string
@@ -106,7 +108,7 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 			gcalUntil = &t
 		}
 
-		events, err := gcal.FetchEvents(opts.GCalCalendar, *gcalSince, *gcalUntil)
+		events, err := gcal.FetchEvents(opts.GCalCalendar, *gcalSince, *gcalUntil, opts.GCalAttendee, opts.GCalKeywords)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "calendar fetch: %v\n", err)
 		}

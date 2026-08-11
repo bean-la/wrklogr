@@ -100,9 +100,12 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 			reportTZ := cfg.Timezone
 			nokoCfg := cfg.Noko
 			llmCfg := resolveLLMConfig(cfg, "", "")
-			gcalCal := ""
+			gcalCal, gcalAttendee := "", ""
+			var gcalKeywords []string
 			if cfg.GCal != nil {
 				gcalCal = cfg.GCal.Calendar
+				gcalAttendee = cfg.GCal.Attendee
+				gcalKeywords = cfg.GCal.Keywords
 			}
 
 			if cacheDir == "" {
@@ -121,6 +124,8 @@ The cache file can be used by generate-wiki to skip already-processed days.`,
 					Timezone:      reportTZ,
 					GCalFlag:      gcalFlag,
 					GCalCalendar:  gcalCal,
+					GCalAttendee:  gcalAttendee,
+					GCalKeywords:  gcalKeywords,
 					NokoDryRun:    true,
 					NokoConfig:    nokoCfg,
 					LLMConfig:     &llmCfg,
