@@ -122,11 +122,16 @@ func TestIsBillableAuthor(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]bool{
+		// Team — billable
 		"seb@bean.la":                     true,
+		"nick@bean.la":                    true,
 		"seb@bean.studio":                 true,
 		"bean-la@users.noreply.github.com": true,
+		// Non-team — excluded
 		"nick@nphillips.com":              false,
+		"someone@gmail.com":               false,
 		"79544226+shopify[bot]@users.noreply.github.com": false,
+		// Unknown — kept
 		"":                                true,
 	}
 	for author, want := range cases {

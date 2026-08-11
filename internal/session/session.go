@@ -16,18 +16,22 @@ type Commit struct {
 }
 
 // IsBillableAuthor reports whether a commit's author should be billed.
-// Billing policy: bill seb + herm agents; EXCLUDE client dev + shopify bots.
-// Matches on author email/name; unknown/empty authors are kept (don't silently
-// drop commits that lack author metadata).
+// Billing policy: ALLOWLIST — only known team members are billable.
+// Empty/unknown authors are kept (don't silently drop commits that lack
+// author metadata), but any identifiable non-team author is excluded.
 func IsBillableAuthor(author string) bool {
 	a := strings.ToLower(strings.TrimSpace(author))
 	if a == "" {
+		return true // unknown — don't silently drop
+	}
+	// Explicit team allowlist
+	if strings.HasSuffix(a, "@bean.la") || strings.HasSuffix(a, "@bean.studio") {
 		return true
 	}
-	if strings.Contains(a, "nphillips") || strings.Contains(a, "shopify") {
-		return false
+	if strings.Contains(a, "bean-la@users.noreply.github.com") {
+		return true // herm agent commits
 	}
-	return true
+	return false
 }
 
 type Session struct {
