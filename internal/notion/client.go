@@ -208,12 +208,8 @@ func (c *Client) UpdateInvoice(ctx context.Context, pageID string, inv InvoiceRe
 	if inv.Description != "" {
 		props["Description"] = richTextPropValue(inv.Description)
 	}
-	if inv.NET != "" {
-		props["Net"] = map[string]any{"select": map[string]any{"name": inv.NET}}
-	}
-	if inv.NetDays > 0 {
-		props["Net Days"] = map[string]any{"number": inv.NetDays}
-	}
+	// Net (rollup) and Net Days (formula) are read-only computed properties —
+	// derived from the Client relation; cannot be written via the API.
 	_, err := c.do(ctx, "PATCH", "/pages/"+pageID, map[string]any{"properties": props})
 	return err
 }
@@ -225,7 +221,8 @@ func (c *Client) CreateInvoice(ctx context.Context, dbID string, inv InvoiceRequ
 		"Invoice Number": titlePropValue(inv.InvoiceNumber),
 		"Amount":         map[string]any{"number": inv.Amount},
 		"Billed Dates":   map[string]any{"date": map[string]any{"start": inv.BilledFrom, "end": inv.BilledTo}},
-		"Invoice Status": map[string]any{"select": map[string]any{"name": "Draft"}},
+		// Invoice Status is a status-type property in the DB (not select).
+		"Invoice Status": map[string]any{"status": map[string]any{"name": "Draft"}},
 	}
 	if inv.Description != "" {
 		props["Description"] = richTextPropValue(inv.Description)
@@ -235,9 +232,9 @@ func (c *Client) CreateInvoice(ctx context.Context, dbID string, inv InvoiceRequ
 			"relation": []any{map[string]any{"id": inv.ClientPageID}},
 		}
 	}
-	if inv.NET != "" {
-		props["Net"] = map[string]any{"select": map[string]any{"name": inv.NET}}
-	}
+	// Net is a rollup property (computed from the Client relation) — read-only,
+	// cannot be written via the API. The rollup derives from the linked client.
+	_ = inv.NET
 	if inv.NetDays > 0 {
 		props["Net Days"] = map[string]any{"number": inv.NetDays}
 	}
