@@ -21,6 +21,7 @@ type Config struct {
 	GCal       *GCalConfig   `toml:"gcal"`
 	LLM        *LLMConfig    `toml:"llm"`
 	Notion     *NotionConfig `toml:"notion"`
+	Stripe     *StripeConfig `toml:"stripe"`
 }
 
 type GCalConfig struct {
@@ -36,12 +37,12 @@ type LLMConfig struct {
 }
 
 type NotionConfig struct {
-	APIToken    string  `toml:"api_token"`
-	InvoiceDBID string  `toml:"invoice_db_id"`
-	ClientsDBID string  `toml:"clients_db_id"`
+	APIToken    string `toml:"api_token"`
+	InvoiceDBID string `toml:"invoice_db_id"`
+	ClientsDBID string `toml:"clients_db_id"`
 	// Role selects which rate column to use from the Clients DB:
 	// backend (default) | frontend | design | sr_backend | ios
-	Role        string  `toml:"role"`
+	Role string `toml:"role"`
 	// DefaultRate is used when the client's rate for the configured role is unset in Notion.
 	DefaultRate float64 `toml:"default_rate"`
 	// InvoicingURL is the bean-invoicing web app base URL used to render invoice PDFs.
@@ -53,11 +54,15 @@ type NotionConfig struct {
 }
 
 type NokoConfig struct {
-	APIToken      string                  `toml:"api_token"`
-	ProjectID     int                     `toml:"project_id"`
-	ProjectName   string                  `toml:"project_name"`
-	RepoProjects  map[string]RepoProject  `toml:"projects"`
-	MinLogMinutes int                     `toml:"min_log_minutes"`
+	APIToken      string                 `toml:"api_token"`
+	ProjectID     int                    `toml:"project_id"`
+	ProjectName   string                 `toml:"project_name"`
+	RepoProjects  map[string]RepoProject `toml:"projects"`
+	MinLogMinutes int                    `toml:"min_log_minutes"`
+}
+
+type StripeConfig struct {
+	APIKey string `toml:"api_key"`
 }
 
 type RepoProject struct {
@@ -85,6 +90,7 @@ type RuntimeConfig struct {
 	GCal       *GCalConfig
 	LLM        *LLMConfig
 	Notion     *NotionConfig
+	Stripe     *StripeConfig
 	Path       string
 }
 
@@ -170,6 +176,7 @@ func buildRuntimeConfig(cfg Config, path string) (*RuntimeConfig, error) {
 		GCal:       cfg.GCal,
 		LLM:        cfg.LLM,
 		Notion:     cfg.Notion,
+		Stripe:     cfg.Stripe,
 		Path:       path,
 	}, nil
 }
