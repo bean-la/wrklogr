@@ -71,6 +71,31 @@ Entries with `development`, `QA`, `design`, or `PM` Noko tags are classified
 using the Bean API rules. Generated Stripe line metadata preserves raw minutes,
 category, rounded days, rate, and Noko entry IDs.
 
+For client-based Notion overrides, add an optional profile keyed by the Noko
+project ID. A profile supplies the default rate and can override the legacy
+category rates without changing the global defaults:
+
+```toml
+[stripe.profiles."606165"]
+default_rate = 1000
+rounding = "legacy-quarter-day"
+default_category = "backend"
+user_mapping = "bean"
+
+[stripe.profiles."606165".rates]
+backend = 1000
+frontend = 900
+design = 900
+pm = 900
+qa = 900
+```
+
+The profile is used only when `--day-rate` and `--rounding` are not supplied
+explicitly. Explicit flags win. Profile rates apply to legacy category lines;
+the client profile is copied into Stripe metadata as `pricing_profile`. This
+keeps reusable client pricing separate from invoice-only `--gratis-days`,
+`--total-override`, and `--discount-note` adjustments.
+
 The old Notion invoice's `gratis_*` and `total_override` values can be carried
 into a draft explicitly. Repeat `--gratis-days category=days` for each gratis
 row. `--total-override` adds one final positive or negative adjustment so the

@@ -268,7 +268,7 @@ func classifyLegacyCategory(entry noko.Entry, legacy *config.StripeLegacyConfig,
 	return defaultCategory
 }
 
-func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until string, dayRate float64, rounding string) string {
+func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until string, dayRate float64, rounding, pricingProfile string) string {
 	var ids []string
 	for _, day := range days {
 		for _, id := range day.EntryIDs {
@@ -276,8 +276,74 @@ func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until strin
 		}
 	}
 	sort.Strings(ids)
-	input := fmt.Sprintf("noko:%d:%s:%s:%.2f:%s:%s", projectID, since, until, dayRate, rounding, strings.Join(ids, ","))
+	input := fmt.Sprintf("noko:%d:%s:%s:%.2f:%s:%s:%s", projectID, since, until, dayRate, rounding, pricingProfile, strings.Join(ids, ","))
 	return fmt.Sprintf("noko-%x", sha256.Sum256([]byte(input)))
+}
+
+func stripeClientProfile(cfg *config.RuntimeConfig, projectID int) (string, *config.StripeClientProfile) {
+	if cfg == nil || cfg.Stripe == nil || cfg.Stripe.Profiles == nil {
+		return "", nil
+	}
+	key := strconv.Itoa(projectID)
+	profile, ok := cfg.Stripe.Profiles[key]
+	if !ok {
+		return "", nil
+	}
+	return key, &profile
+}
+
+func effectiveLegacyConfig(global *config.StripeLegacyConfig, profile *config.StripeClientProfile) *config.StripeLegacyConfig {
+	if global == nil && profile == nil {
+		return nil
+	}
+	out := &config.StripeLegacyConfig{}
+	if global != nil {
+		*out = *global
+		out.Rates = cloneFloatMap(global.Rates)
+		out.Users = cloneStringMap(global.Users)
+	}
+	if profile != nil {
+		if strings.TrimSpace(profile.DefaultCategory) != "" {
+			out.DefaultCategory = profile.DefaultCategory
+		}
+		if strings.TrimSpace(profile.UserMapping) != "" {
+			out.UserMapping = profile.UserMapping
+		}
+		if profile.Rates != nil {
+			if out.Rates == nil {
+				out.Rates = map[string]float64{}
+			}
+			for category, rate := range profile.Rates {
+				out.Rates[strings.ToLower(strings.TrimSpace(category))] = rate
+			}
+		}
+		if profile.Users != nil {
+			out.Users = cloneStringMap(profile.Users)
+		}
+	}
+	return out
+}
+
+func cloneFloatMap(in map[string]float64) map[string]float64 {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]float64, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneStringMap(in map[string][]string) map[string][]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for key, values := range in {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func containsString(values []string, wanted string) bool {
@@ -353,6 +419,13 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if projectID <= 0 {
 				return fmt.Errorf("--project-id is required (or configure noko.project_id)")
 			}
+			pricingProfile, profile := stripeClientProfile(cfg, projectID)
+			if !cmd.Flags().Changed("day-rate") && profile != nil && profile.DefaultRate > 0 {
+				dayRateInput = fmt.Sprintf("%.2f", profile.DefaultRate)
+			}
+			if !cmd.Flags().Changed("rounding") && profile != nil && strings.TrimSpace(profile.Rounding) != "" {
+				rounding = strings.TrimSpace(profile.Rounding)
+			}
 			if sinceInput == "" || untilInput == "" {
 				return fmt.Errorf("--since and --until are required")
 			}
@@ -397,17 +470,18 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if err != nil {
 				return err
 			}
+			effectiveLegacy := effectiveLegacyConfig(func() *config.StripeLegacyConfig {
+				if cfg.Stripe != nil {
+					return cfg.Stripe.Legacy
+				}
+				return nil
+			}(), profile)
 			var days []stripeInvoiceDay
 			switch rounding {
 			case "daily-cents":
 				days, err = aggregateStripeInvoiceDays(entries, rate)
 			case "legacy-quarter-day":
-				days, err = aggregateLegacyQuarterDayWithConfig(entries, rate, func() *config.StripeLegacyConfig {
-					if cfg.Stripe != nil {
-						return cfg.Stripe.Legacy
-					}
-					return nil
-				}())
+				days, err = aggregateLegacyQuarterDayWithConfig(entries, rate, effectiveLegacy)
 			default:
 				return fmt.Errorf("invalid --rounding %q (use daily-cents or legacy-quarter-day)", rounding)
 			}
@@ -421,8 +495,8 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return fmt.Errorf("no billable Noko entries found")
 			}
 			legacyRates := map[string]float64{"backend": rate, "frontend": rate, "design": rate, "pm": rate, "qa": rate, "other": rate}
-			if cfg.Stripe != nil && cfg.Stripe.Legacy != nil && cfg.Stripe.Legacy.Rates != nil {
-				for category, categoryRate := range cfg.Stripe.Legacy.Rates {
+			if effectiveLegacy != nil && effectiveLegacy.Rates != nil {
+				for category, categoryRate := range effectiveLegacy.Rates {
 					if categoryRate > 0 {
 						legacyRates[strings.ToLower(category)] = categoryRate
 					}
@@ -470,7 +544,7 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return fmt.Errorf("Stripe secret key required via --stripe-key, STRIPE_SECRET_KEY, or config")
 			}
 			stripe := stripeclient.NewClient(key, nil)
-			invoiceKey := stripeInvoiceKey(days, projectID, sinceInput, untilInput, rate, rounding)
+			invoiceKey := stripeInvoiceKey(days, projectID, sinceInput, untilInput, rate, rounding, pricingProfile)
 			metadata := map[string]string{
 				"wrklogr_source":      "noko",
 				"wrklogr_invoice_key": invoiceKey,
@@ -478,6 +552,9 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				"noko_from":           sinceInput,
 				"noko_until":          untilInput,
 				"rounding":            rounding,
+			}
+			if pricingProfile != "" {
+				metadata["pricing_profile"] = pricingProfile
 			}
 			for _, status := range []string{"draft", "open"} {
 				existing, listErr := stripe.ListInvoices(context.Background(), customerID, status)

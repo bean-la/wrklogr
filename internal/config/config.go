@@ -62,8 +62,21 @@ type NokoConfig struct {
 }
 
 type StripeConfig struct {
-	APIKey string              `toml:"api_key"`
-	Legacy *StripeLegacyConfig `toml:"legacy"`
+	APIKey   string                         `toml:"api_key"`
+	Legacy   *StripeLegacyConfig            `toml:"legacy"`
+	Profiles map[string]StripeClientProfile `toml:"profiles"`
+}
+
+// StripeClientProfile is the small, versioned client-specific layer that
+// replaces reading rate overrides from Notion during invoice creation. Keys
+// are normally Noko project IDs. Rates are keyed by legacy category.
+type StripeClientProfile struct {
+	DefaultRate     float64             `toml:"default_rate"`
+	Rates           map[string]float64  `toml:"rates"`
+	Rounding        string              `toml:"rounding"`
+	DefaultCategory string              `toml:"default_category"`
+	UserMapping     string              `toml:"user_mapping"`
+	Users           map[string][]string `toml:"users"`
 }
 
 // StripeLegacyConfig controls compatibility with the Bean invoice API.

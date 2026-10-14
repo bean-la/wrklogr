@@ -86,6 +86,29 @@ func TestAggregateLegacyQuarterDayCategoriesAndRates(t *testing.T) {
 	}
 }
 
+func TestEffectiveLegacyConfigAppliesClientProfileOverrides(t *testing.T) {
+	global := &config.StripeLegacyConfig{
+		DefaultCategory: "backend",
+		Rates:           map[string]float64{"backend": 850, "design": 1000},
+		UserMapping:     "logical",
+	}
+	profile := &config.StripeClientProfile{
+		DefaultCategory: "frontend",
+		Rates:           map[string]float64{"backend": 1000, "design": 900},
+		UserMapping:     "bean",
+	}
+	effective := effectiveLegacyConfig(global, profile)
+	if effective.DefaultCategory != "frontend" || effective.UserMapping != "bean" {
+		t.Fatalf("expected profile policy overrides, got %#v", effective)
+	}
+	if effective.Rates["backend"] != 1000 || effective.Rates["design"] != 900 {
+		t.Fatalf("expected profile rates to override global rates, got %#v", effective.Rates)
+	}
+	if global.Rates["backend"] != 850 {
+		t.Fatalf("profile merge mutated global config: %#v", global.Rates)
+	}
+}
+
 func TestClassifyLegacyCategorySupportsBeanUserFallback(t *testing.T) {
 	entry := noko.Entry{User: noko.User{Email: "backend@example.com"}}
 	legacy := &config.StripeLegacyConfig{
