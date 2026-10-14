@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -59,7 +60,41 @@ func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripe
 	return days, nil
 }
 
-func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until string, dayRate float64) string {
+// aggregateLegacyQuarterDay collapses the period into one summary line using
+// the Bean invoice API's historical rule: convert minutes to eight-hour days,
+// round to the nearest quarter day, then multiply by the day rate.
+func aggregateLegacyQuarterDay(entries []noko.Entry, dayRate float64) ([]stripeInvoiceDay, error) {
+	if dayRate <= 0 {
+		return nil, fmt.Errorf("day rate must be greater than zero")
+	}
+	var minutes int
+	var entryIDs []int
+	var descriptions []string
+	for _, entry := range entries {
+		if entry.Minutes <= 0 {
+			continue
+		}
+		minutes += entry.Minutes
+		if entry.ID > 0 {
+			entryIDs = append(entryIDs, entry.ID)
+		}
+		if description := strings.TrimSpace(entry.Description); description != "" && !containsString(descriptions, description) {
+			descriptions = append(descriptions, description)
+		}
+	}
+	if minutes == 0 {
+		return nil, nil
+	}
+	sort.Ints(entryIDs)
+	rawDays := float64(minutes) / 480.0
+	roundedDays := math.Round(rawDays*4) / 4
+	amountCents := int64(math.Round(roundedDays * dayRate * 100))
+	return []stripeInvoiceDay{{
+		Minutes: minutes, AmountCents: amountCents, Descriptions: descriptions, EntryIDs: entryIDs,
+	}}, nil
+}
+
+func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until string, dayRate float64, rounding string) string {
 	var ids []string
 	for _, day := range days {
 		for _, id := range day.EntryIDs {
@@ -67,7 +102,7 @@ func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until strin
 		}
 	}
 	sort.Strings(ids)
-	input := fmt.Sprintf("noko:%d:%s:%s:%.2f:%s", projectID, since, until, dayRate, strings.Join(ids, ","))
+	input := fmt.Sprintf("noko:%d:%s:%s:%.2f:%s:%s", projectID, since, until, dayRate, rounding, strings.Join(ids, ","))
 	return fmt.Sprintf("noko-%x", sha256.Sum256([]byte(input)))
 }
 
@@ -88,6 +123,12 @@ func stripeDayDescription(day stripeInvoiceDay, dayRate float64) string {
 	return fmt.Sprintf("%s — %s — %.2fh at $%.2f/day", day.Date, desc, float64(day.Minutes)/60, dayRate)
 }
 
+func legacyQuarterDayDescription(day stripeInvoiceDay, dayRate float64) string {
+	rawDays := float64(day.Minutes) / 480.0
+	roundedDays := math.Round(rawDays*4) / 4
+	return fmt.Sprintf("Legacy Bean rounding — %.2f days at $%.2f/day (%.2fh raw)", roundedDays, dayRate, float64(day.Minutes)/60)
+}
+
 func resolveStripeAPIKey(cfg *config.RuntimeConfig, flag string) string {
 	key := strings.TrimSpace(flag)
 	if key == "" {
@@ -100,7 +141,7 @@ func resolveStripeAPIKey(cfg *config.RuntimeConfig, flag string) string {
 }
 
 func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Command {
-	var customerID, projectIDInput, sinceInput, untilInput, dayRateInput, description string
+	var customerID, projectIDInput, sinceInput, untilInput, dayRateInput, description, rounding string
 	var stripeKey, nokoToken string
 	var daysUntilDue int
 	var create bool
@@ -157,7 +198,15 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if err != nil {
 				return err
 			}
-			days, err := aggregateStripeInvoiceDays(entries, rate)
+			var days []stripeInvoiceDay
+			switch rounding {
+			case "daily-cents":
+				days, err = aggregateStripeInvoiceDays(entries, rate)
+			case "legacy-quarter-day":
+				days, err = aggregateLegacyQuarterDay(entries, rate)
+			default:
+				return fmt.Errorf("invalid --rounding %q (use daily-cents or legacy-quarter-day)", rounding)
+			}
 			if err != nil {
 				return err
 			}
@@ -169,7 +218,15 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			var total int64
 			for _, day := range days {
 				total += day.AmountCents
-				fmt.Fprintf(out, "  %s  %.2fh  $%.2f  %s\n", day.Date, float64(day.Minutes)/60, float64(day.AmountCents)/100, stripeDayDescription(day, rate))
+				lineDescription := stripeDayDescription(day, rate)
+				if rounding == "legacy-quarter-day" {
+					lineDescription = legacyQuarterDayDescription(day, rate)
+				}
+				date := day.Date
+				if date == "" {
+					date = "period"
+				}
+				fmt.Fprintf(out, "  %s  %.2fh  $%.2f  %s\n", date, float64(day.Minutes)/60, float64(day.AmountCents)/100, lineDescription)
 			}
 			fmt.Fprintf(out, "total: $%.2f\n", float64(total)/100)
 			if !create {
@@ -181,13 +238,14 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return fmt.Errorf("Stripe secret key required via --stripe-key, STRIPE_SECRET_KEY, or config")
 			}
 			stripe := stripeclient.NewClient(key, nil)
-			invoiceKey := stripeInvoiceKey(days, projectID, sinceInput, untilInput, rate)
+			invoiceKey := stripeInvoiceKey(days, projectID, sinceInput, untilInput, rate, rounding)
 			metadata := map[string]string{
 				"wrklogr_source":      "noko",
 				"wrklogr_invoice_key": invoiceKey,
 				"noko_project_id":     strconv.Itoa(projectID),
 				"noko_from":           sinceInput,
 				"noko_until":          untilInput,
+				"rounding":            rounding,
 			}
 			for _, status := range []string{"draft", "open"} {
 				existing, listErr := stripe.ListInvoices(context.Background(), customerID, status)
@@ -208,8 +266,12 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return err
 			}
 			for _, day := range days {
+				lineDescription := stripeDayDescription(day, rate)
+				if rounding == "legacy-quarter-day" {
+					lineDescription = legacyQuarterDayDescription(day, rate)
+				}
 				if err := stripe.CreateInvoiceItem(context.Background(), stripeclient.CreateInvoiceItemParams{
-					Customer: customerID, Invoice: invoice.ID, Amount: day.AmountCents, Currency: "usd", Description: stripeDayDescription(day, rate),
+					Customer: customerID, Invoice: invoice.ID, Amount: day.AmountCents, Currency: "usd", Description: lineDescription,
 				}); err != nil {
 					return fmt.Errorf("invoice %s created, but line item for %s failed: %w", invoice.ID, day.Date, err)
 				}
@@ -223,6 +285,7 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	cmd.Flags().StringVar(&sinceInput, "since", "", "Start date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&untilInput, "until", "", "End date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&dayRateInput, "day-rate", "900", "Billing day rate in USD")
+	cmd.Flags().StringVar(&rounding, "rounding", "daily-cents", "Rounding model: daily-cents or legacy-quarter-day")
 	cmd.Flags().StringVar(&description, "description", "", "Stripe invoice description")
 	cmd.Flags().StringVar(&nokoToken, "noko-token", "", "Noko API token")
 	cmd.Flags().StringVar(&stripeKey, "stripe-key", "", "Stripe secret API key")

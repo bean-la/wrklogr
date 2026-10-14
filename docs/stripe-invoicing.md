@@ -5,10 +5,16 @@
 The command is intentionally draft-first:
 
 1. It reads Noko entries for a project and date range.
-2. It groups entries by day and calculates each line at `minutes / 480 × day-rate`.
+2. By default it groups entries by day and calculates each line at `minutes / 480 × day-rate`, rounded to cents.
 3. It prints a day/rate breakdown without changing Stripe.
 4. With explicit `--create`, it creates a Stripe `send_invoice` draft and one line item per day.
 5. Finalizing and sending remain separate approval steps in Stripe.
+
+For compatibility with the retired Bean invoice API, pass
+`--rounding legacy-quarter-day`. This collapses the period into a summary line,
+converts minutes to eight-hour days, rounds the days to the nearest 0.25, and
+then multiplies by the day rate. The default `daily-cents` mode is retained for
+the more detailed Noko day breakdown.
 
 Created drafts carry a deterministic fingerprint of the Noko project, period,
 rate, and entry IDs. Before creating, wrklogr checks the customer’s draft and
@@ -37,6 +43,18 @@ wrklogr stripe-invoice \
   --since 2026-09-01 \
   --until 2026-09-30 \
   --day-rate 900
+```
+
+Legacy-compatible preview:
+
+```sh
+wrklogr stripe-invoice \
+  --customer-id cus_... \
+  --project-id 12345 \
+  --since 2026-09-01 \
+  --until 2026-09-30 \
+  --day-rate 850 \
+  --rounding legacy-quarter-day
 ```
 
 Create a Stripe draft after reviewing the output:

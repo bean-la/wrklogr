@@ -40,3 +40,25 @@ func TestAggregateStripeInvoiceDaysRejectsInvalidRate(t *testing.T) {
 		t.Fatal("expected invalid rate error")
 	}
 }
+
+func TestAggregateLegacyQuarterDay(t *testing.T) {
+	entries := []noko.Entry{
+		{ID: 2, Minutes: 120},
+		{ID: 1, Minutes: 120},
+		{ID: 3, Minutes: 90},
+	}
+	days, err := aggregateLegacyQuarterDay(entries, 850)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 1 {
+		t.Fatalf("expected one summary line, got %#v", days)
+	}
+	// 5.5h / 8 = 0.6875 days, rounded to 0.75 days at $850/day.
+	if days[0].Minutes != 330 || days[0].AmountCents != 63750 {
+		t.Fatalf("unexpected legacy aggregation: %#v", days[0])
+	}
+	if len(days[0].EntryIDs) != 3 || days[0].EntryIDs[0] != 1 {
+		t.Fatalf("unexpected entry IDs: %#v", days[0].EntryIDs)
+	}
+}
