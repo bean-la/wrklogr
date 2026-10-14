@@ -41,3 +41,26 @@ func TestClientCreatesInvoiceAndItem(t *testing.T) {
 		t.Fatalf("unexpected paths: %v", paths)
 	}
 }
+
+func TestListInvoices(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/invoices" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		if r.URL.Query().Get("customer") != "cus_test" || r.URL.Query().Get("status") != "draft" {
+			t.Fatalf("unexpected query: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"in_test","status":"draft","metadata":{"wrklogr_invoice_key":"noko-test"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("sk_test_example", server.Client())
+	client.baseURL = server.URL + "/v1"
+	invoices, err := client.ListInvoices(context.Background(), "cus_test", "draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invoices) != 1 || invoices[0].Metadata["wrklogr_invoice_key"] != "noko-test" {
+		t.Fatalf("unexpected invoices: %#v", invoices)
+	}
+}

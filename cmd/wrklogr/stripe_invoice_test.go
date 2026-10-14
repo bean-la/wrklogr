@@ -8,10 +8,10 @@ import (
 
 func TestAggregateStripeInvoiceDays(t *testing.T) {
 	entries := []noko.Entry{
-		{Date: "2026-09-03", Minutes: 120, Description: "site work"},
-		{Date: "2026-09-03", Minutes: 120, Description: "site work"},
-		{Date: "2026-09-03", Minutes: 60, Description: "client call"},
-		{Date: "2026-09-02", Minutes: 60, Description: "planning"},
+		{ID: 2, Date: "2026-09-03", Minutes: 120, Description: "site work"},
+		{ID: 1, Date: "2026-09-03", Minutes: 120, Description: "site work"},
+		{ID: 3, Date: "2026-09-03", Minutes: 60, Description: "client call"},
+		{ID: 4, Date: "2026-09-02", Minutes: 60, Description: "planning"},
 		{Date: "2026-09-04", Minutes: 0, Description: "ignored"},
 	}
 	days, err := aggregateStripeInvoiceDays(entries, 900)
@@ -29,6 +29,9 @@ func TestAggregateStripeInvoiceDays(t *testing.T) {
 	}
 	if len(days[1].Descriptions) != 2 {
 		t.Fatalf("expected deduplicated descriptions: %#v", days[1].Descriptions)
+	}
+	if len(days[1].EntryIDs) != 3 || days[1].EntryIDs[0] != 1 || days[1].EntryIDs[2] != 3 {
+		t.Fatalf("unexpected entry IDs: %#v", days[1].EntryIDs)
 	}
 }
 

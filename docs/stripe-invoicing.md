@@ -10,6 +10,11 @@ The command is intentionally draft-first:
 4. With explicit `--create`, it creates a Stripe `send_invoice` draft and one line item per day.
 5. Finalizing and sending remain separate approval steps in Stripe.
 
+Created drafts carry a deterministic fingerprint of the Noko project, period,
+rate, and entry IDs. Before creating, wrklogr checks the customer’s draft and
+open Stripe invoices for the same fingerprint and reuses the existing invoice
+instead of creating a duplicate.
+
 ## Configuration
 
 Noko credentials can be supplied through `NOKO_TOKEN`, `--noko-token`, or the existing `[noko] api_token` setting. Stripe credentials can be supplied through `STRIPE_SECRET_KEY`, `--stripe-key`, or:

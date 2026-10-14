@@ -27,10 +27,15 @@ func NewClient(apiKey string, httpClient *http.Client) *Client {
 }
 
 type Invoice struct {
-	ID               string `json:"id"`
-	Status           string `json:"status"`
-	AmountDue        int64  `json:"amount_due"`
-	HostedInvoiceURL string `json:"hosted_invoice_url"`
+	ID               string            `json:"id"`
+	Status           string            `json:"status"`
+	AmountDue        int64             `json:"amount_due"`
+	HostedInvoiceURL string            `json:"hosted_invoice_url"`
+	Metadata         map[string]string `json:"metadata"`
+}
+
+type invoiceList struct {
+	Data []Invoice `json:"data"`
 }
 
 type CreateInvoiceParams struct {
@@ -38,6 +43,7 @@ type CreateInvoiceParams struct {
 	Description      string
 	DaysUntilDue     int
 	CollectionMethod string
+	Metadata         map[string]string
 }
 
 func (c *Client) CreateInvoice(ctx context.Context, p CreateInvoiceParams) (*Invoice, error) {
@@ -51,11 +57,48 @@ func (c *Client) CreateInvoice(ctx context.Context, p CreateInvoiceParams) (*Inv
 	if p.DaysUntilDue > 0 {
 		form.Set("days_until_due", strconv.Itoa(p.DaysUntilDue))
 	}
+	for key, value := range p.Metadata {
+		form.Set("metadata["+key+"]", value)
+	}
 	var out Invoice
 	if err := c.do(ctx, http.MethodPost, "/invoices", form, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ListInvoices returns invoices for a customer and status. It is used to make
+// repeated draft creation for the same Noko period detectable.
+func (c *Client) ListInvoices(ctx context.Context, customer, status string) ([]Invoice, error) {
+	params := url.Values{}
+	params.Set("customer", customer)
+	params.Set("limit", "100")
+	if status != "" {
+		params.Set("status", status)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/invoices?"+params.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create Stripe request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("User-Agent", "wrklogr/stripe-invoice")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Stripe request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read Stripe response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Stripe API error (%d): %s", resp.StatusCode, string(body))
+	}
+	var out invoiceList
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decode Stripe response: %w", err)
+	}
+	return out.Data, nil
 }
 
 type CreateInvoiceItemParams struct {

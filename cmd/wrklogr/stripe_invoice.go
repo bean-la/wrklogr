@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"sort"
@@ -20,6 +21,7 @@ type stripeInvoiceDay struct {
 	Minutes      int
 	AmountCents  int64
 	Descriptions []string
+	EntryIDs     []int
 }
 
 func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripeInvoiceDay, error) {
@@ -39,6 +41,9 @@ func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripe
 			byDate[date] = day
 		}
 		day.Minutes += entry.Minutes
+		if entry.ID > 0 {
+			day.EntryIDs = append(day.EntryIDs, entry.ID)
+		}
 		description := strings.TrimSpace(entry.Description)
 		if description != "" && !containsString(day.Descriptions, description) {
 			day.Descriptions = append(day.Descriptions, description)
@@ -46,11 +51,24 @@ func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripe
 	}
 	days := make([]stripeInvoiceDay, 0, len(byDate))
 	for _, day := range byDate {
+		sort.Ints(day.EntryIDs)
 		day.AmountCents = (int64(day.Minutes)*ratesCents + 240) / 480
 		days = append(days, *day)
 	}
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	return days, nil
+}
+
+func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until string, dayRate float64) string {
+	var ids []string
+	for _, day := range days {
+		for _, id := range day.EntryIDs {
+			ids = append(ids, strconv.Itoa(id))
+		}
+	}
+	sort.Strings(ids)
+	input := fmt.Sprintf("noko:%d:%s:%s:%.2f:%s", projectID, since, until, dayRate, strings.Join(ids, ","))
+	return fmt.Sprintf("noko-%x", sha256.Sum256([]byte(input)))
 }
 
 func containsString(values []string, wanted string) bool {
@@ -163,8 +181,28 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return fmt.Errorf("Stripe secret key required via --stripe-key, STRIPE_SECRET_KEY, or config")
 			}
 			stripe := stripeclient.NewClient(key, nil)
+			invoiceKey := stripeInvoiceKey(days, projectID, sinceInput, untilInput, rate)
+			metadata := map[string]string{
+				"wrklogr_source":      "noko",
+				"wrklogr_invoice_key": invoiceKey,
+				"noko_project_id":     strconv.Itoa(projectID),
+				"noko_from":           sinceInput,
+				"noko_until":          untilInput,
+			}
+			for _, status := range []string{"draft", "open"} {
+				existing, listErr := stripe.ListInvoices(context.Background(), customerID, status)
+				if listErr != nil {
+					return listErr
+				}
+				for _, candidate := range existing {
+					if candidate.Metadata["wrklogr_invoice_key"] == invoiceKey {
+						fmt.Fprintf(out, "existing Stripe %s invoice: %s (no duplicate created)\n", candidate.Status, candidate.ID)
+						return nil
+					}
+				}
+			}
 			invoice, err := stripe.CreateInvoice(context.Background(), stripeclient.CreateInvoiceParams{
-				Customer: customerID, Description: description, DaysUntilDue: daysUntilDue, CollectionMethod: "send_invoice",
+				Customer: customerID, Description: description, DaysUntilDue: daysUntilDue, CollectionMethod: "send_invoice", Metadata: metadata,
 			})
 			if err != nil {
 				return err
