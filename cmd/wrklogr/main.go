@@ -527,7 +527,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				fmt.Fprintln(cmd.OutOrStdout(), "  --noko-dry-run")
 			}
 			if nokoTokenInput != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "  --noko-token %s\n", nokoTokenInput)
+				fmt.Fprintln(cmd.OutOrStdout(), "  --noko-token [provided]")
 			}
 			if minLogMinutes > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "  --min-log-minutes %d\n", minLogMinutes)
