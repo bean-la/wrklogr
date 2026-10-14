@@ -147,6 +147,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	var meOnly bool
 	var authorFilter string
 	var sessionGapInput string
+	var minSessionHours int
 	var timezoneInput string
 	var localMode bool = true
 	var localPaths []string
@@ -221,6 +222,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					return fmt.Errorf("parse --timezone: %w", loadErr)
 				}
 				reportTZ = loadedTZ
+			}
+			if minSessionHours == 0 {
+				minSessionHours = cfg.MinSessionHours
 			}
 
 			authToken := strings.TrimSpace(token)
@@ -323,6 +327,15 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 					total += filtered
 					fmt.Fprintf(cmd.OutOrStdout(), "%s: %d commits\n", repoLabel, filtered)
 				}
+				localSessions := session.BuildWithMinimum(merged, sessionGap, minSessionHours)
+				localDays := session.BucketByDay(localSessions, reportTZ)
+				fmt.Fprintf(cmd.OutOrStdout(), "total: %d commits\n", total)
+				grandTotal := 0
+				for _, day := range localDays {
+					grandTotal += day.TotalHours
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: %dh (%d sessions)\n", day.Day, day.TotalHours, len(day.Sessions))
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "grand total: %dh (%.1f days)\n", grandTotal, float64(grandTotal)/8.0)
 			} else {
 				repos := cfg.Repos
 				if len(reposInput) > 0 {
@@ -367,24 +380,25 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 				llmCfg := resolveLLMConfig(cfg, llmAPIKey, llmModel)
 
 				opts := reportOpts{
-					Repos:         repos,
-					Since:         since,
-					Until:         until,
-					Author:        meAuthor,
-					SessionGap:    sessionGap,
-					Timezone:      reportTZ,
-					GCalFlag:      gcalFlag,
-					GCalCalendar:  gcalCal,
-					GCalAttendee:  gcalAttendee,
-					GCalKeywords:  gcalKeywords,
-					NokoDryRun:    nokoDryRun,
-					NokoPush:      pushNoko,
-					NokoToken:     nokoToken,
-					NokoConfig:    cfg.Noko,
-					LLMSummarize:  llmSummarize,
-					LLMConfig:     &llmCfg,
-					GitHubToken:   authToken,
-					MinLogMinutes: minLogMinutes,
+					Repos:           repos,
+					Since:           since,
+					Until:           until,
+					Author:          meAuthor,
+					SessionGap:      sessionGap,
+					MinSessionHours: minSessionHours,
+					Timezone:        reportTZ,
+					GCalFlag:        gcalFlag,
+					GCalCalendar:    gcalCal,
+					GCalAttendee:    gcalAttendee,
+					GCalKeywords:    gcalKeywords,
+					NokoDryRun:      nokoDryRun,
+					NokoPush:        pushNoko,
+					NokoToken:       nokoToken,
+					NokoConfig:      cfg.Noko,
+					LLMSummarize:    llmSummarize,
+					LLMConfig:       &llmCfg,
+					GitHubToken:     authToken,
+					MinLogMinutes:   minLogMinutes,
 				}
 
 				result, runErr := runReport(context.Background(), cmd.OutOrStdout(), opts)
@@ -487,6 +501,9 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 			if sessionGapInput != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  --session-gap %s\n", sessionGapInput)
 			}
+			if minSessionHours > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  --min-session-hours %d\n", minSessionHours)
+			}
 			if timezoneInput != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  --timezone %s\n", timezoneInput)
 			}
@@ -531,6 +548,7 @@ func newReportCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Comman
 	cmd.Flags().BoolVar(&meOnly, "me", false, "Only include commits authored by the authenticated GitHub user")
 	cmd.Flags().StringVar(&authorFilter, "author", "", "Only include commits by the given GitHub login (alternative to --me for CI)")
 	cmd.Flags().StringVar(&sessionGapInput, "session-gap", "", "Session split gap override (e.g. 2h, 90m)")
+	cmd.Flags().IntVar(&minSessionHours, "min-session-hours", 0, "Minimum fuzzy hours per session (default from config: 1)")
 	cmd.Flags().StringVar(&timezoneInput, "timezone", "", "IANA timezone for day bucketing (e.g. America/New_York)")
 	cmd.Flags().BoolVar(&localMode, "local", true, "Use local git history instead of GitHub API")
 	cmd.Flags().StringSliceVar(&localPaths, "local-path", nil, "Local git repo path(s) to scan (used with --local)")

@@ -65,6 +65,9 @@ repos = ["bean-la/wrklogr", "other-org/repo-name"]
 # Time gap that splits commits into separate sessions (e.g., "2h", "90m")
 session_gap = "2h"
 
+# Minimum duration assigned to each inferred session
+min_session_hours = 1
+
 # IANA timezone for day bucketing in reports
 timezone = "America/New_York"
 
@@ -79,6 +82,9 @@ timezone = "America/New_York"
 # Google Calendar integration (reads public iCal feed)
 [gcal]
 calendar = "your@email.com"
+# Optional title and attendee filters; both filters must match when configured
+keywords = ["client"]
+attendees = ["client@example.com"]
 
 # Notion invoice integration
 [notion]
@@ -187,6 +193,7 @@ Fetch commits and generate a worklog report.
 - `--max-depth int` - Maximum depth for submodule discovery (default: 3)
 - `--me` - Filter commits to the authenticated GitHub user
 - `--session-gap string` - Override session split gap (e.g., "2h", "90m")
+- `--min-session-hours int` - Floor each inferred session at this many hours
 - `--since string` - Start date/time (RFC3339 or YYYY-MM-DD)
 - `--timezone string` - IANA timezone for day bucketing
 - `--token string` - GitHub token (defaults to GITHUB_TOKEN or GH_TOKEN)

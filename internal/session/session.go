@@ -48,6 +48,10 @@ type DaySummary struct {
 }
 
 func Build(commits []Commit, sessionGap time.Duration) []Session {
+	return BuildWithMinimum(commits, sessionGap, 1)
+}
+
+func BuildWithMinimum(commits []Commit, sessionGap time.Duration, minimumHours int) []Session {
 	if len(commits) == 0 {
 		return nil
 	}
@@ -78,13 +82,13 @@ func Build(commits []Commit, sessionGap time.Duration) []Session {
 		// author so unannotated commits still merge by time.
 		sameAuthor := prev.Author == next.Author || prev.Author == "" || next.Author == ""
 		if next.Timestamp.Sub(prev.Timestamp) > sessionGap || !sameAuthor {
-			out = append(out, makeSession(current))
+			out = append(out, makeSessionWithMinimum(current, minimumHours))
 			current = []Commit{next}
 			continue
 		}
 		current = append(current, next)
 	}
-	out = append(out, makeSession(current))
+	out = append(out, makeSessionWithMinimum(current, minimumHours))
 	return out
 }
 
@@ -122,11 +126,18 @@ func BucketByDay(sessions []Session, loc *time.Location) []DaySummary {
 }
 
 func makeSession(commits []Commit) Session {
+	return makeSessionWithMinimum(commits, 1)
+}
+
+func makeSessionWithMinimum(commits []Commit, minimumHours int) Session {
 	start := commits[0].Timestamp
 	end := commits[len(commits)-1].Timestamp
 	hours := int(math.Ceil(end.Sub(start).Hours()))
 	if hours == 0 {
 		hours = 1
+	}
+	if minimumHours > hours {
+		hours = minimumHours
 	}
 	return Session{
 		Commits:    commits,

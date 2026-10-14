@@ -14,8 +14,21 @@ func TestBuildRuntimeConfigDefaults(t *testing.T) {
 	if cfg.SessionGap != 2*time.Hour {
 		t.Fatalf("SessionGap = %v, want %v", cfg.SessionGap, 2*time.Hour)
 	}
+	if cfg.MinSessionHours != 1 {
+		t.Fatalf("MinSessionHours = %d, want 1", cfg.MinSessionHours)
+	}
 	if cfg.Timezone.String() != time.Local.String() {
 		t.Fatalf("Timezone = %v, want local timezone %v", cfg.Timezone, time.Local)
+	}
+}
+
+func TestBuildRuntimeConfigMinSessionHours(t *testing.T) {
+	cfg, err := buildRuntimeConfig(Config{MinSessionHours: 2}, "")
+	if err != nil {
+		t.Fatalf("buildRuntimeConfig() error = %v", err)
+	}
+	if cfg.MinSessionHours != 2 {
+		t.Fatalf("MinSessionHours = %d, want 2", cfg.MinSessionHours)
 	}
 }
 

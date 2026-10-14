@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/bean-la/wrklogr/internal/config"
-	ghclient "github.com/bean-la/wrklogr/internal/github"
 	gcal "github.com/bean-la/wrklogr/internal/gcal"
+	ghclient "github.com/bean-la/wrklogr/internal/github"
 	"github.com/bean-la/wrklogr/internal/llm"
 	"github.com/bean-la/wrklogr/internal/noko"
 	"github.com/bean-la/wrklogr/internal/session"
@@ -24,24 +24,25 @@ type nokoEntry struct {
 }
 
 type reportOpts struct {
-	Repos         []string
-	Since         *time.Time
-	Until         *time.Time
-	Author        string
-	SessionGap    time.Duration
-	Timezone      *time.Location
-	GCalFlag      bool
-	GCalCalendar  string
-	GCalAttendee  string
-	GCalKeywords  []string
-	NokoDryRun    bool
-	NokoPush      bool
-	NokoToken     string
-	NokoConfig    *config.NokoConfig
-	LLMSummarize  bool
-	LLMConfig     *llm.Config
-	GitHubToken   string
-	MinLogMinutes int
+	Repos           []string
+	Since           *time.Time
+	Until           *time.Time
+	Author          string
+	SessionGap      time.Duration
+	MinSessionHours int
+	Timezone        *time.Location
+	GCalFlag        bool
+	GCalCalendar    string
+	GCalAttendee    string
+	GCalKeywords    []string
+	NokoDryRun      bool
+	NokoPush        bool
+	NokoToken       string
+	NokoConfig      *config.NokoConfig
+	LLMSummarize    bool
+	LLMConfig       *llm.Config
+	GitHubToken     string
+	MinLogMinutes   int
 }
 
 type reportResult struct {
@@ -93,7 +94,7 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 	sort.Slice(merged, func(i, j int) bool {
 		return merged[i].Timestamp.Before(merged[j].Timestamp)
 	})
-	sessions := session.Build(merged, opts.SessionGap)
+	sessions := session.BuildWithMinimum(merged, opts.SessionGap, opts.MinSessionHours)
 	days := session.BucketByDay(sessions, opts.Timezone)
 
 	if opts.GCalFlag && opts.GCalCalendar != "" {
@@ -121,11 +122,17 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 			}
 			for _, ev := range events {
 				dayKey := ev.Start.Format("2006-01-02")
-				minutes := int(ev.Length.Minutes())
+				minutes := uncoveredCalendarMinutes(ev.Start, ev.End, sessions)
+				if minutes <= 0 {
+					continue
+				}
 				if minutes < 1 {
 					minutes = 1
 				}
 				fuzzyHours := (minutes + 59) / 60
+				if opts.MinSessionHours > fuzzyHours {
+					fuzzyHours = opts.MinSessionHours
+				}
 				sess := session.Session{
 					Commits: []session.Commit{{
 						Repo:      "📅 " + ev.Title,
@@ -218,6 +225,31 @@ func runReport(ctx context.Context, out interface{ Write([]byte) (int, error) },
 		NokoEntries:  entries,
 		TotalCommits: total,
 	}, nil
+}
+
+func uncoveredCalendarMinutes(start, end time.Time, sessions []session.Session) int {
+	if end.Before(start) {
+		return 0
+	}
+	covered := 0
+	for _, sess := range sessions {
+		overlapStart := start
+		if sess.Start.After(overlapStart) {
+			overlapStart = sess.Start
+		}
+		overlapEnd := end
+		if sess.End.Before(overlapEnd) {
+			overlapEnd = sess.End
+		}
+		if overlapEnd.After(overlapStart) {
+			covered += int(overlapEnd.Sub(overlapStart).Minutes())
+		}
+	}
+	total := int(end.Sub(start).Minutes())
+	if total-covered < 0 {
+		return 0
+	}
+	return total - covered
 }
 
 type nameMap func(id int) string

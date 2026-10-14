@@ -14,13 +14,14 @@ import (
 const defaultSessionGap = 2 * time.Hour
 
 type Config struct {
-	Repos      []string      `toml:"repos"`
-	SessionGap string        `toml:"session_gap"`
-	Timezone   string        `toml:"timezone"`
-	Noko       *NokoConfig   `toml:"noko"`
-	GCal       *GCalConfig   `toml:"gcal"`
-	LLM        *LLMConfig    `toml:"llm"`
-	Notion     *NotionConfig `toml:"notion"`
+	Repos           []string      `toml:"repos"`
+	SessionGap      string        `toml:"session_gap"`
+	MinSessionHours int           `toml:"min_session_hours"`
+	Timezone        string        `toml:"timezone"`
+	Noko            *NokoConfig   `toml:"noko"`
+	GCal            *GCalConfig   `toml:"gcal"`
+	LLM             *LLMConfig    `toml:"llm"`
+	Notion          *NotionConfig `toml:"notion"`
 }
 
 type GCalConfig struct {
@@ -36,12 +37,12 @@ type LLMConfig struct {
 }
 
 type NotionConfig struct {
-	APIToken    string  `toml:"api_token"`
-	InvoiceDBID string  `toml:"invoice_db_id"`
-	ClientsDBID string  `toml:"clients_db_id"`
+	APIToken    string `toml:"api_token"`
+	InvoiceDBID string `toml:"invoice_db_id"`
+	ClientsDBID string `toml:"clients_db_id"`
 	// Role selects which rate column to use from the Clients DB:
 	// backend (default) | frontend | design | sr_backend | ios
-	Role        string  `toml:"role"`
+	Role string `toml:"role"`
 	// DefaultRate is used when the client's rate for the configured role is unset in Notion.
 	DefaultRate float64 `toml:"default_rate"`
 	// InvoicingURL is the bean-invoicing web app base URL used to render invoice PDFs.
@@ -53,11 +54,11 @@ type NotionConfig struct {
 }
 
 type NokoConfig struct {
-	APIToken      string                  `toml:"api_token"`
-	ProjectID     int                     `toml:"project_id"`
-	ProjectName   string                  `toml:"project_name"`
-	RepoProjects  map[string]RepoProject  `toml:"projects"`
-	MinLogMinutes int                     `toml:"min_log_minutes"`
+	APIToken      string                 `toml:"api_token"`
+	ProjectID     int                    `toml:"project_id"`
+	ProjectName   string                 `toml:"project_name"`
+	RepoProjects  map[string]RepoProject `toml:"projects"`
+	MinLogMinutes int                    `toml:"min_log_minutes"`
 }
 
 type RepoProject struct {
@@ -78,14 +79,15 @@ func (n *NokoConfig) ProjectForRepo(repo string) (int, string) {
 }
 
 type RuntimeConfig struct {
-	Repos      []string
-	SessionGap time.Duration
-	Timezone   *time.Location
-	Noko       *NokoConfig
-	GCal       *GCalConfig
-	LLM        *LLMConfig
-	Notion     *NotionConfig
-	Path       string
+	Repos           []string
+	SessionGap      time.Duration
+	MinSessionHours int
+	Timezone        *time.Location
+	Noko            *NokoConfig
+	GCal            *GCalConfig
+	LLM             *LLMConfig
+	Notion          *NotionConfig
+	Path            string
 }
 
 func Load(configPathOverride string) (*RuntimeConfig, error) {
@@ -163,15 +165,23 @@ func buildRuntimeConfig(cfg Config, path string) (*RuntimeConfig, error) {
 	}
 
 	return &RuntimeConfig{
-		Repos:      repos,
-		SessionGap: sessionGap,
-		Timezone:   location,
-		Noko:       cfg.Noko,
-		GCal:       cfg.GCal,
-		LLM:        cfg.LLM,
-		Notion:     cfg.Notion,
-		Path:       path,
+		Repos:           repos,
+		SessionGap:      sessionGap,
+		MinSessionHours: maxInt(cfg.MinSessionHours, 1),
+		Timezone:        location,
+		Noko:            cfg.Noko,
+		GCal:            cfg.GCal,
+		LLM:             cfg.LLM,
+		Notion:          cfg.Notion,
+		Path:            path,
 	}, nil
+}
+
+func maxInt(value, minimum int) int {
+	if value < minimum {
+		return minimum
+	}
+	return value
 }
 
 func normalizeAndValidateRepos(repos []string) ([]string, error) {

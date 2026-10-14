@@ -47,6 +47,14 @@ func TestSessionFromCommitsFuzzySpan(t *testing.T) {
 	}
 }
 
+func TestBuildWithMinimumFloorsShortSessions(t *testing.T) {
+	base := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+	sessions := BuildWithMinimum([]Commit{{Timestamp: base}}, 2*time.Hour, 2)
+	if len(sessions) != 1 || sessions[0].FuzzyHours != 2 {
+		t.Fatalf("expected one 2-hour session, got %#v", sessions)
+	}
+}
+
 func TestBucketByDayUsesConfiguredTimezone(t *testing.T) {
 	t.Parallel()
 
