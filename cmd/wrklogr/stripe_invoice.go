@@ -97,6 +97,21 @@ func buildLegacyAdjustments(days []stripeInvoiceDay, gratis []string, rates map[
 			})
 			subtotal = target
 		}
+	} else {
+		// BeanInvoice.vue displays Math.round(subTotal) when there is no
+		// total_override. Preserve that final customer-facing behavior as a
+		// cents adjustment on the Stripe invoice.
+		target := int64(math.Round(float64(subtotal)/100)) * 100
+		if delta := target - subtotal; delta != 0 {
+			adjustments = append(adjustments, stripeInvoiceAdjustment{
+				AmountCents: delta,
+				Description: "Legacy whole-dollar total rounding",
+				Metadata: map[string]string{
+					"wrklogr_adjustment": "legacy_total_rounding",
+				},
+			})
+			subtotal = target
+		}
 	}
 	return adjustments, subtotal, nil
 }

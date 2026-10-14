@@ -103,6 +103,23 @@ func TestBuildLegacyAdjustments(t *testing.T) {
 	}
 }
 
+func TestBuildLegacyAdjustmentsMatchesRendererWholeDollarRounding(t *testing.T) {
+	days := []stripeInvoiceDay{
+		{AmountCents: 63750, Category: "backend"},
+		{AmountCents: 25000, Category: "design"},
+	}
+	adjustments, total, err := buildLegacyAdjustments(days, nil, nil, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adjustments) != 1 || adjustments[0].AmountCents != 50 {
+		t.Fatalf("expected $0.50 renderer rounding adjustment, got %#v", adjustments)
+	}
+	if total != 88800 {
+		t.Fatalf("expected rounded $888.00 total, got %d", total)
+	}
+}
+
 func TestBuildLegacyAdjustmentsRequiresGratisRate(t *testing.T) {
 	if _, _, err := buildLegacyAdjustments(nil, []string{"design=0.25"}, map[string]float64{}, 0, ""); err == nil {
 		t.Fatal("expected missing rate error")

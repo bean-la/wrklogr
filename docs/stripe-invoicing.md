@@ -73,8 +73,10 @@ wrklogr stripe-invoice \
   ...
 ```
 
-Gratis rows are negative Stripe invoice items. No adjustment is created unless
-one of these flags is provided.
+Gratis rows are negative Stripe invoice items. Legacy mode also adds an
+explicit cents adjustment when needed to preserve the web renderer's final
+whole-dollar `Math.round(subTotal)` behavior. A `total_override` supersedes
+that rounding adjustment.
 
 ## Examples
 
