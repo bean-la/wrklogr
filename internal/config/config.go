@@ -62,7 +62,16 @@ type NokoConfig struct {
 }
 
 type StripeConfig struct {
-	APIKey string `toml:"api_key"`
+	APIKey string              `toml:"api_key"`
+	Legacy *StripeLegacyConfig `toml:"legacy"`
+}
+
+// StripeLegacyConfig controls compatibility with the Bean invoice API.
+// Rates and users are keyed by backend, frontend, design, pm, qa, or other.
+type StripeLegacyConfig struct {
+	DefaultCategory string              `toml:"default_category"`
+	Rates           map[string]float64  `toml:"rates"`
+	Users           map[string][]string `toml:"users"`
 }
 
 type RepoProject struct {

@@ -107,6 +107,7 @@ type CreateInvoiceItemParams struct {
 	Amount      int64
 	Currency    string
 	Description string
+	Metadata    map[string]string
 }
 
 func (c *Client) CreateInvoiceItem(ctx context.Context, p CreateInvoiceItemParams) error {
@@ -116,6 +117,9 @@ func (c *Client) CreateInvoiceItem(ctx context.Context, p CreateInvoiceItemParam
 	form.Set("amount", strconv.FormatInt(p.Amount, 10))
 	form.Set("currency", p.Currency)
 	form.Set("description", p.Description)
+	for key, value := range p.Metadata {
+		form.Set("metadata["+key+"]", value)
+	}
 	return c.do(ctx, http.MethodPost, "/invoiceitems", form, &struct{}{})
 }
 

@@ -32,6 +32,31 @@ api_key = ""
 
 Prefer environment variables or a secret manager for live keys. The existing Notion invoice and Heroku PDF commands remain available during migration; they are not required for the Stripe path.
 
+To configure the legacy category model, add a Stripe legacy section. The
+default category is used when an entry has no recognized tag or configured
+user. Category rates override `--day-rate` for that category:
+
+```toml
+[stripe.legacy]
+default_category = "backend"
+
+[stripe.legacy.rates]
+backend = 850
+frontend = 850
+design = 1000
+pm = 850
+qa = 850
+
+[stripe.legacy.users]
+backend = ["backend@example.com"]
+frontend = ["frontend@example.com"]
+design = ["designer@example.com"]
+```
+
+Entries with `development`, `QA`, `design`, or `PM` Noko tags are classified
+using the Bean API rules. Generated Stripe line metadata preserves raw minutes,
+category, rounded days, rate, and Noko entry IDs.
+
 ## Examples
 
 Preview only:

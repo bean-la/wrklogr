@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/bean-la/wrklogr/internal/config"
 	"github.com/bean-la/wrklogr/internal/noko"
 )
 
@@ -60,5 +61,27 @@ func TestAggregateLegacyQuarterDay(t *testing.T) {
 	}
 	if len(days[0].EntryIDs) != 3 || days[0].EntryIDs[0] != 1 {
 		t.Fatalf("unexpected entry IDs: %#v", days[0].EntryIDs)
+	}
+}
+
+func TestAggregateLegacyQuarterDayCategoriesAndRates(t *testing.T) {
+	legacy := &config.StripeLegacyConfig{
+		DefaultCategory: "backend",
+		Rates:           map[string]float64{"backend": 850, "design": 1000},
+		Users:           map[string][]string{"backend": {"dev@example.com"}},
+	}
+	entries := []noko.Entry{
+		{ID: 1, Minutes: 120, User: noko.User{Email: "dev@example.com"}, Tags: []noko.Tag{{Name: "development"}}},
+		{ID: 2, Minutes: 120, User: noko.User{Email: "designer@example.com"}, Tags: []noko.Tag{{Name: "design"}}},
+	}
+	days, err := aggregateLegacyQuarterDayWithConfig(entries, 900, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 2 || days[0].Category != "backend" || days[1].Category != "design" {
+		t.Fatalf("unexpected category lines: %#v", days)
+	}
+	if days[0].AmountCents != 21250 || days[1].AmountCents != 25000 {
+		t.Fatalf("unexpected category amounts: %#v", days)
 	}
 }

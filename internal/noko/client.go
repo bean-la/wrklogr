@@ -43,6 +43,14 @@ type entryProject struct {
 	ID int `json:"id"`
 }
 
+type Tag struct {
+	Name string `json:"name"`
+}
+
+type User struct {
+	Email string `json:"email"`
+}
+
 type Entry struct {
 	ID          int          `json:"id"`
 	Date        string       `json:"date"`
@@ -52,6 +60,8 @@ type Entry struct {
 	Project     entryProject `json:"project"`
 	SourceURL   string       `json:"source_url"`
 	InvoicedAt  string       `json:"invoiced_at"`
+	Tags        []Tag        `json:"tags"`
+	User        User         `json:"user"`
 }
 
 // ProjectID returns the Noko project ID for this entry.

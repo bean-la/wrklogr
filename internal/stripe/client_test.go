@@ -11,9 +11,16 @@ import (
 
 func TestClientCreatesInvoiceAndItem(t *testing.T) {
 	var paths []string
+	var itemMetadata string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer sk_test_example" {
 			t.Errorf("missing auth header: %q", r.Header.Get("Authorization"))
+		}
+		if r.URL.Path == "/v1/invoiceitems" {
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parse item form: %v", err)
+			}
+			itemMetadata = r.Form.Get("metadata[legacy_category]")
 		}
 		paths = append(paths, r.URL.Path)
 		if r.URL.Path == "/v1/invoices" {
@@ -34,8 +41,11 @@ func TestClientCreatesInvoiceAndItem(t *testing.T) {
 	if invoice.ID != "in_test" {
 		t.Fatalf("unexpected invoice: %#v", invoice)
 	}
-	if err := client.CreateInvoiceItem(context.Background(), CreateInvoiceItemParams{Customer: "cus_test", Invoice: invoice.ID, Amount: 90000, Currency: "usd", Description: "work"}); err != nil {
+	if err := client.CreateInvoiceItem(context.Background(), CreateInvoiceItemParams{Customer: "cus_test", Invoice: invoice.ID, Amount: 90000, Currency: "usd", Description: "work", Metadata: map[string]string{"legacy_category": "backend"}}); err != nil {
 		t.Fatal(err)
+	}
+	if itemMetadata != "backend" {
+		t.Fatalf("invoice item metadata = %q", itemMetadata)
 	}
 	if strings.Join(paths, ",") != "/v1/invoices,/v1/invoiceitems" {
 		t.Fatalf("unexpected paths: %v", paths)

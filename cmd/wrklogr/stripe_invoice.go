@@ -23,6 +23,9 @@ type stripeInvoiceDay struct {
 	AmountCents  int64
 	Descriptions []string
 	EntryIDs     []int
+	Category     string
+	RoundedDays  float64
+	Rate         float64
 }
 
 func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripeInvoiceDay, error) {
@@ -64,34 +67,105 @@ func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripe
 // the Bean invoice API's historical rule: convert minutes to eight-hour days,
 // round to the nearest quarter day, then multiply by the day rate.
 func aggregateLegacyQuarterDay(entries []noko.Entry, dayRate float64) ([]stripeInvoiceDay, error) {
+	return aggregateLegacyQuarterDayWithConfig(entries, dayRate, nil)
+}
+
+func aggregateLegacyQuarterDayWithConfig(entries []noko.Entry, dayRate float64, legacy *config.StripeLegacyConfig) ([]stripeInvoiceDay, error) {
 	if dayRate <= 0 {
 		return nil, fmt.Errorf("day rate must be greater than zero")
 	}
-	var minutes int
-	var entryIDs []int
-	var descriptions []string
+	defaultCategory := "backend"
+	if legacy != nil && strings.TrimSpace(legacy.DefaultCategory) != "" {
+		defaultCategory = strings.ToLower(strings.TrimSpace(legacy.DefaultCategory))
+	}
+	minutesByCategory := map[string]int{}
+	entryIDsByCategory := map[string][]int{}
+	descriptionsByCategory := map[string][]string{}
 	for _, entry := range entries {
 		if entry.Minutes <= 0 {
 			continue
 		}
-		minutes += entry.Minutes
+		category := classifyLegacyCategory(entry, legacy, defaultCategory)
+		minutesByCategory[category] += entry.Minutes
 		if entry.ID > 0 {
-			entryIDs = append(entryIDs, entry.ID)
+			entryIDsByCategory[category] = append(entryIDsByCategory[category], entry.ID)
 		}
-		if description := strings.TrimSpace(entry.Description); description != "" && !containsString(descriptions, description) {
-			descriptions = append(descriptions, description)
+		if description := strings.TrimSpace(entry.Description); description != "" && !containsString(descriptionsByCategory[category], description) {
+			descriptionsByCategory[category] = append(descriptionsByCategory[category], description)
 		}
 	}
-	if minutes == 0 {
+	if len(minutesByCategory) == 0 {
 		return nil, nil
 	}
-	sort.Ints(entryIDs)
-	rawDays := float64(minutes) / 480.0
-	roundedDays := math.Round(rawDays*4) / 4
-	amountCents := int64(math.Round(roundedDays * dayRate * 100))
-	return []stripeInvoiceDay{{
-		Minutes: minutes, AmountCents: amountCents, Descriptions: descriptions, EntryIDs: entryIDs,
-	}}, nil
+	order := []string{"backend", "frontend", "design", "pm", "qa", "other"}
+	var lines []stripeInvoiceDay
+	for _, category := range order {
+		minutes := minutesByCategory[category]
+		if minutes == 0 {
+			continue
+		}
+		rate := dayRate
+		if legacy != nil && legacy.Rates != nil && legacy.Rates[category] > 0 {
+			rate = legacy.Rates[category]
+		}
+		if category == "other" && (legacy == nil || legacy.Rates[category] <= 0) {
+			return nil, fmt.Errorf("legacy category %q has %d unpriced minutes; configure stripe.legacy.rates.%s or a default category", category, minutes, category)
+		}
+		entryIDs := entryIDsByCategory[category]
+		sort.Ints(entryIDs)
+		rawDays := float64(minutes) / 480.0
+		roundedDays := math.Round(rawDays*4) / 4
+		lines = append(lines, stripeInvoiceDay{
+			Minutes: minutes, AmountCents: int64(math.Round(roundedDays * rate * 100)),
+			Descriptions: descriptionsByCategory[category], EntryIDs: entryIDs,
+			Category: category, RoundedDays: roundedDays, Rate: rate,
+		})
+	}
+	return lines, nil
+}
+
+func classifyLegacyCategory(entry noko.Entry, legacy *config.StripeLegacyConfig, defaultCategory string) string {
+	email := strings.ToLower(strings.TrimSpace(entry.User.Email))
+	hasTag := func(wanted string) bool {
+		for _, tag := range entry.Tags {
+			if strings.EqualFold(strings.TrimSpace(tag.Name), wanted) {
+				return true
+			}
+		}
+		return false
+	}
+	hasUser := func(category string) bool {
+		if legacy == nil || legacy.Users == nil {
+			return false
+		}
+		for _, candidate := range legacy.Users[category] {
+			if strings.EqualFold(strings.TrimSpace(candidate), email) {
+				return true
+			}
+		}
+		return false
+	}
+	if hasTag("development") {
+		if hasUser("backend") {
+			return "backend"
+		}
+		return "frontend"
+	}
+	if hasTag("QA") {
+		return "qa"
+	}
+	if hasTag("design") {
+		return "design"
+	}
+	if hasTag("PM") {
+		return "pm"
+	}
+	for _, category := range []string{"backend", "frontend", "design"} {
+		if hasUser(category) {
+			return category
+		}
+	}
+	return defaultCategory
 }
 
 func stripeInvoiceKey(days []stripeInvoiceDay, projectID int, since, until string, dayRate float64, rounding string) string {
@@ -124,9 +198,15 @@ func stripeDayDescription(day stripeInvoiceDay, dayRate float64) string {
 }
 
 func legacyQuarterDayDescription(day stripeInvoiceDay, dayRate float64) string {
-	rawDays := float64(day.Minutes) / 480.0
-	roundedDays := math.Round(rawDays*4) / 4
-	return fmt.Sprintf("Legacy Bean rounding — %.2f days at $%.2f/day (%.2fh raw)", roundedDays, dayRate, float64(day.Minutes)/60)
+	rate := dayRate
+	if day.Rate > 0 {
+		rate = day.Rate
+	}
+	category := day.Category
+	if category == "" {
+		category = "work"
+	}
+	return fmt.Sprintf("Legacy Bean rounding — %s — %.2f days at $%.2f/day (%.2fh raw)", category, day.RoundedDays, rate, float64(day.Minutes)/60)
 }
 
 func resolveStripeAPIKey(cfg *config.RuntimeConfig, flag string) string {
@@ -203,7 +283,12 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			case "daily-cents":
 				days, err = aggregateStripeInvoiceDays(entries, rate)
 			case "legacy-quarter-day":
-				days, err = aggregateLegacyQuarterDay(entries, rate)
+				days, err = aggregateLegacyQuarterDayWithConfig(entries, rate, func() *config.StripeLegacyConfig {
+					if cfg.Stripe != nil {
+						return cfg.Stripe.Legacy
+					}
+					return nil
+				}())
 			default:
 				return fmt.Errorf("invalid --rounding %q (use daily-cents or legacy-quarter-day)", rounding)
 			}
@@ -270,8 +355,22 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				if rounding == "legacy-quarter-day" {
 					lineDescription = legacyQuarterDayDescription(day, rate)
 				}
+				lineMetadata := map[string]string{
+					"wrklogr_rounding": rounding,
+					"noko_entry_ids":   joinEntryIDs(day.EntryIDs),
+					"raw_minutes":      strconv.Itoa(day.Minutes),
+				}
+				if day.Category != "" {
+					lineMetadata["legacy_category"] = day.Category
+				}
+				if day.RoundedDays > 0 {
+					lineMetadata["legacy_rounded_days"] = fmt.Sprintf("%.2f", day.RoundedDays)
+				}
+				if day.Rate > 0 {
+					lineMetadata["legacy_day_rate"] = fmt.Sprintf("%.2f", day.Rate)
+				}
 				if err := stripe.CreateInvoiceItem(context.Background(), stripeclient.CreateInvoiceItemParams{
-					Customer: customerID, Invoice: invoice.ID, Amount: day.AmountCents, Currency: "usd", Description: lineDescription,
+					Customer: customerID, Invoice: invoice.ID, Amount: day.AmountCents, Currency: "usd", Description: lineDescription, Metadata: lineMetadata,
 				}); err != nil {
 					return fmt.Errorf("invoice %s created, but line item for %s failed: %w", invoice.ID, day.Date, err)
 				}
@@ -292,4 +391,12 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	cmd.Flags().IntVar(&daysUntilDue, "days-until-due", 30, "Days until payment is due")
 	cmd.Flags().BoolVar(&create, "create", false, "Create a Stripe draft invoice after previewing")
 	return cmd
+}
+
+func joinEntryIDs(ids []int) string {
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, strconv.Itoa(id))
+	}
+	return strings.Join(parts, ",")
 }
