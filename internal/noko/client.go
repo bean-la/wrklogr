@@ -46,10 +46,12 @@ type entryProject struct {
 type Entry struct {
 	ID          int          `json:"id"`
 	Date        string       `json:"date"`
+	Billable    bool         `json:"billable"`
 	Minutes     int          `json:"minutes"`
 	Description string       `json:"description"`
 	Project     entryProject `json:"project"`
 	SourceURL   string       `json:"source_url"`
+	InvoicedAt  string       `json:"invoiced_at"`
 }
 
 // ProjectID returns the Noko project ID for this entry.
@@ -92,6 +94,16 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
 // ListEntries fetches all entries between from and to (YYYY-MM-DD), following pagination.
 // Pass non-empty userIDs or projectIDs to filter; pass nil/empty to include all.
 func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int, projectIDs []int) ([]Entry, error) {
+	return c.listEntries(ctx, from, to, userIDs, projectIDs, false)
+}
+
+// ListInvoiceableEntries returns entries Noko considers ready for a new invoice:
+// billable entries that have not already been invoiced.
+func (c *Client) ListInvoiceableEntries(ctx context.Context, from, to string, userIDs []int, projectIDs []int) ([]Entry, error) {
+	return c.listEntries(ctx, from, to, userIDs, projectIDs, true)
+}
+
+func (c *Client) listEntries(ctx context.Context, from, to string, userIDs []int, projectIDs []int, invoiceableOnly bool) ([]Entry, error) {
 	var all []Entry
 	pageNum := 1
 	for {
@@ -105,6 +117,10 @@ func (c *Client) ListEntries(ctx context.Context, from, to string, userIDs []int
 		}
 		for _, id := range projectIDs {
 			params.Add("project_ids", fmt.Sprintf("%d", id))
+		}
+		if invoiceableOnly {
+			params.Set("billable", "true")
+			params.Set("invoiced", "false")
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/entries?"+params.Encode(), nil)

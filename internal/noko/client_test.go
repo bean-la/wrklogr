@@ -134,3 +134,26 @@ func TestNewClientDefaults(t *testing.T) {
 		t.Fatal("expected non-nil httpClient")
 	}
 }
+
+func TestListInvoiceableEntriesAddsNokoFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("billable") != "true" || r.URL.Query().Get("invoiced") != "false" {
+			t.Fatalf("missing invoiceability filters: %s", r.URL.RawQuery)
+		}
+		if r.URL.Query().Get("project_ids") != "606165" {
+			t.Fatalf("missing project filter: %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode([]Entry{{Date: "2026-10-07", Minutes: 60, Billable: true}})
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token", server.Client())
+	client.baseURL = server.URL
+	entries, err := client.ListInvoiceableEntries(context.Background(), "2026-10-01", "2026-10-14", nil, []int{606165})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].Billable {
+		t.Fatalf("unexpected entries: %#v", entries)
+	}
+}

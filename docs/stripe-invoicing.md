@@ -1,6 +1,6 @@
 # Stripe invoicing
 
-`wrklogr stripe-invoice` is the replacement path for creating a payable invoice from Noko work. Noko is the source of truth for time, while Stripe owns the customer, invoice, hosted payment page, and payment state.
+`wrklogr stripe-invoice` is the replacement path for creating a payable invoice from Noko work. Noko is the source of truth for time, while Stripe owns the customer, invoice, hosted payment page, and payment state. The command asks Noko for billable, not-yet-invoiced entries only, matching Noko's own invoice action.
 
 The command is intentionally draft-first:
 

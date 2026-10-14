@@ -135,7 +135,7 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if token == "" {
 				return fmt.Errorf("Noko token required via --noko-token, NOKO_TOKEN, or config")
 			}
-			entries, err := noko.NewClient(token, nil).ListEntries(context.Background(), sinceInput, untilInput, nil, []int{projectID})
+			entries, err := noko.NewClient(token, nil).ListInvoiceableEntries(context.Background(), sinceInput, untilInput, nil, []int{projectID})
 			if err != nil {
 				return err
 			}
