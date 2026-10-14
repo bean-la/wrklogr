@@ -37,6 +37,12 @@ api_key = ""
 
 Prefer environment variables or a secret manager for live keys. The existing Notion invoice and Heroku PDF commands remain available during migration; they are not required for the Stripe path.
 
+The Stripe account may maintain one-time service Prices for approved day-rate
+references. The invoice command still uses explicit invoice-item amounts from
+Noko: Price quantities are not the source of truth because legacy quarter-day
+rounding, gratis deductions, renderer rounding, and total overrides can change
+the final amount per invoice.
+
 To configure the legacy category model, add a Stripe legacy section. The
 default category is used when an entry has no recognized tag or configured
 user. Category rates override `--day-rate` for that category:
