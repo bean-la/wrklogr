@@ -10,6 +10,11 @@ The command is intentionally draft-first:
 4. With explicit `--create`, it creates a Stripe `send_invoice` draft and one line item per day.
 5. Finalizing and sending remain separate approval steps in Stripe.
 
+For historical parity audits only, `--include-invoiced` reads all billable
+entries in the period, including entries Noko has already marked invoiced. It
+is read-only and cannot be combined with `--create`; normal invoice creation
+continues to use only billable, not-yet-invoiced entries.
+
 For compatibility with the retired Bean invoice API, pass
 `--rounding legacy-quarter-day`. This collapses the period into a summary line,
 converts minutes to eight-hour days, rounds the days to the nearest 0.25, and

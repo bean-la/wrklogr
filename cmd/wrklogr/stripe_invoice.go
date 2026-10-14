@@ -314,7 +314,7 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	var gratisDays []string
 	var totalOverride float64
 	var daysUntilDue int
-	var create bool
+	var create, includeInvoiced bool
 
 	cmd := &cobra.Command{
 		Use:   "stripe-invoice",
@@ -364,7 +364,24 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if token == "" {
 				return fmt.Errorf("Noko token required via --noko-token, NOKO_TOKEN, or config")
 			}
-			entries, err := noko.NewClient(token, nil).ListInvoiceableEntries(context.Background(), sinceInput, untilInput, nil, []int{projectID})
+			nokoClient := noko.NewClient(token, nil)
+			var entries []noko.Entry
+			if includeInvoiced {
+				if create {
+					return fmt.Errorf("--include-invoiced is read-only and cannot be combined with --create")
+				}
+				allEntries, listErr := nokoClient.ListEntries(context.Background(), sinceInput, untilInput, nil, []int{projectID})
+				if listErr != nil {
+					return listErr
+				}
+				for _, entry := range allEntries {
+					if entry.Billable {
+						entries = append(entries, entry)
+					}
+				}
+			} else {
+				entries, err = nokoClient.ListInvoiceableEntries(context.Background(), sinceInput, untilInput, nil, []int{projectID})
+			}
 			if err != nil {
 				return err
 			}
@@ -518,6 +535,7 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	cmd.Flags().StringVar(&stripeKey, "stripe-key", "", "Stripe secret API key")
 	cmd.Flags().IntVar(&daysUntilDue, "days-until-due", 30, "Days until payment is due")
 	cmd.Flags().BoolVar(&create, "create", false, "Create a Stripe draft invoice after previewing")
+	cmd.Flags().BoolVar(&includeInvoiced, "include-invoiced", false, "Read-only audit mode: include historical Noko entries already marked invoiced")
 	return cmd
 }
 
