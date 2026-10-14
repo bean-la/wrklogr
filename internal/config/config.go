@@ -72,6 +72,10 @@ type StripeLegacyConfig struct {
 	DefaultCategory string              `toml:"default_category"`
 	Rates           map[string]float64  `toml:"rates"`
 	Users           map[string][]string `toml:"users"`
+	// UserMapping controls untagged roster classification: logical (default)
+	// maps each roster to its same-named category; bean reproduces the legacy
+	// API's historical backend/frontend fallback mapping.
+	UserMapping string `toml:"user_mapping"`
 }
 
 type RepoProject struct {

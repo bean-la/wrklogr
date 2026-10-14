@@ -86,6 +86,21 @@ func TestAggregateLegacyQuarterDayCategoriesAndRates(t *testing.T) {
 	}
 }
 
+func TestClassifyLegacyCategorySupportsBeanUserFallback(t *testing.T) {
+	entry := noko.Entry{User: noko.User{Email: "backend@example.com"}}
+	legacy := &config.StripeLegacyConfig{
+		Users:       map[string][]string{"backend": {"backend@example.com"}},
+		UserMapping: "bean",
+	}
+	if got := classifyLegacyCategory(entry, legacy, "other"); got != "frontend" {
+		t.Fatalf("expected Bean fallback mapping to frontend, got %q", got)
+	}
+	legacy.UserMapping = "logical"
+	if got := classifyLegacyCategory(entry, legacy, "other"); got != "backend" {
+		t.Fatalf("expected logical fallback mapping to backend, got %q", got)
+	}
+}
+
 func TestBuildLegacyAdjustments(t *testing.T) {
 	days := []stripeInvoiceDay{{AmountCents: 63750, Category: "backend"}}
 	adjustments, total, err := buildLegacyAdjustments(days, []string{"backend=0.25"}, map[string]float64{"backend": 850}, 500, "courtesy discount")

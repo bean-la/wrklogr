@@ -44,6 +44,9 @@ user. Category rates override `--day-rate` for that category:
 ```toml
 [stripe.legacy]
 default_category = "backend"
+# Optional exact compatibility with the old API's untagged roster fallback.
+# Omit for logical backend/frontend roster mapping.
+user_mapping = "bean"
 
 [stripe.legacy.rates]
 backend = 850

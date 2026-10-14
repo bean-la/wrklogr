@@ -248,9 +248,21 @@ func classifyLegacyCategory(entry noko.Entry, legacy *config.StripeLegacyConfig,
 	if hasTag("PM") {
 		return "pm"
 	}
-	for _, category := range []string{"backend", "frontend", "design"} {
-		if hasUser(category) {
-			return category
+	if legacy != nil && strings.EqualFold(strings.TrimSpace(legacy.UserMapping), "bean") {
+		// The legacy Bean API's untagged fallback maps these two roster lists
+		// in the opposite direction. Keep it available for exact historical
+		// reproduction; new configs should use the logical default.
+		if hasUser("backend") {
+			return "frontend"
+		}
+		if hasUser("frontend") {
+			return "backend"
+		}
+	} else {
+		for _, category := range []string{"backend", "frontend", "design"} {
+			if hasUser(category) {
+				return category
+			}
 		}
 	}
 	return defaultCategory
