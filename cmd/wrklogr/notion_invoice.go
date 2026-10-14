@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -74,33 +74,33 @@ type invoiceLine struct {
 }
 
 type notionInvoiceOpts struct {
-	SinceInput    string
-	UntilInput    string
-	InvoiceNumber string
-	Update        bool
-	Author        string
-	RepoPatterns  []string
-	LocalPaths    []string
-	GithubToken   string
-	NotionToken   string
-	DryRun        bool
-	SilentFetch   bool
-	Gcal             bool
-	DescOverride  string
-	AttachPDF        bool
-	NoSnapshot       bool
-	DescriptionOnly  bool
+	SinceInput      string
+	UntilInput      string
+	InvoiceNumber   string
+	Update          bool
+	Author          string
+	RepoPatterns    []string
+	LocalPaths      []string
+	GithubToken     string
+	NotionToken     string
+	DryRun          bool
+	SilentFetch     bool
+	Gcal            bool
+	DescOverride    string
+	AttachPDF       bool
+	NoSnapshot      bool
+	DescriptionOnly bool
 }
 
 type notionInvoiceFetchOpts struct {
-	SinceInput    string
-	UntilInput    string
-	Author        string
-	RepoPatterns  []string
-	LocalPaths    []string
-	GithubToken   string
-	SilentFetch   bool
-	Gcal          bool
+	SinceInput   string
+	UntilInput   string
+	Author       string
+	RepoPatterns []string
+	LocalPaths   []string
+	GithubToken  string
+	SilentFetch  bool
+	Gcal         bool
 }
 
 type notionInvoiceFetched struct {
@@ -266,7 +266,7 @@ func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.R
 		sort.Slice(merged, func(i, j int) bool {
 			return merged[i].Timestamp.Before(merged[j].Timestamp)
 		})
-		days = session.BucketByDay(session.Build(merged, cfg.SessionGap), cfg.Timezone)
+		days = session.BucketByDay(session.BuildWithMinimum(merged, cfg.SessionGap, cfg.MinSessionHours), cfg.Timezone)
 	} else {
 		ghTok := strings.TrimSpace(opts.GithubToken)
 		if ghTok == "" {
@@ -674,14 +674,14 @@ func executeNotionInvoice(cmd *cobra.Command, cfg *config.RuntimeConfig, opts no
 
 	ctx := context.Background()
 	fetched, err := fetchInvoicePipeline(ctx, cmd, cfg, notionInvoiceFetchOpts{
-		SinceInput:    opts.SinceInput,
-		UntilInput:    opts.UntilInput,
-		Author:        opts.Author,
-		RepoPatterns:  opts.RepoPatterns,
-		LocalPaths:    opts.LocalPaths,
-		GithubToken:   opts.GithubToken,
-		SilentFetch:   opts.SilentFetch,
-		Gcal:          opts.Gcal,
+		SinceInput:   opts.SinceInput,
+		UntilInput:   opts.UntilInput,
+		Author:       opts.Author,
+		RepoPatterns: opts.RepoPatterns,
+		LocalPaths:   opts.LocalPaths,
+		GithubToken:  opts.GithubToken,
+		SilentFetch:  opts.SilentFetch,
+		Gcal:         opts.Gcal,
 	})
 	if err != nil {
 		return err
@@ -757,22 +757,22 @@ func newNotionInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 				return runNotionInvoiceWizard(cmd, getConfig)
 			}
 			return executeNotionInvoice(cmd, cfg, notionInvoiceOpts{
-				SinceInput:    sinceInput,
-				UntilInput:    untilInput,
-				InvoiceNumber: invoiceNumber,
-				Update:        update,
-				Author:        author,
-				RepoPatterns:  repoPatterns,
-				LocalPaths:    localPaths,
-				GithubToken:   githubToken,
-				NotionToken:   notionToken,
-				DryRun:        dryRun,
-				SilentFetch:   false,
-				AttachPDF:     attachPDF,
-				NoSnapshot:       noSnapshot,
-				DescriptionOnly:  descriptionOnly,
-				DescOverride:     descOverride,
-				Gcal:             gcalFlag,
+				SinceInput:      sinceInput,
+				UntilInput:      untilInput,
+				InvoiceNumber:   invoiceNumber,
+				Update:          update,
+				Author:          author,
+				RepoPatterns:    repoPatterns,
+				LocalPaths:      localPaths,
+				GithubToken:     githubToken,
+				NotionToken:     notionToken,
+				DryRun:          dryRun,
+				SilentFetch:     false,
+				AttachPDF:       attachPDF,
+				NoSnapshot:      noSnapshot,
+				DescriptionOnly: descriptionOnly,
+				DescOverride:    descOverride,
+				Gcal:            gcalFlag,
 			})
 		},
 	}
