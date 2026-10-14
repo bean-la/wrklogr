@@ -85,3 +85,26 @@ func TestAggregateLegacyQuarterDayCategoriesAndRates(t *testing.T) {
 		t.Fatalf("unexpected category amounts: %#v", days)
 	}
 }
+
+func TestBuildLegacyAdjustments(t *testing.T) {
+	days := []stripeInvoiceDay{{AmountCents: 63750, Category: "backend"}}
+	adjustments, total, err := buildLegacyAdjustments(days, []string{"backend=0.25"}, map[string]float64{"backend": 850}, 500, "courtesy discount")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adjustments) != 2 {
+		t.Fatalf("expected gratis and override adjustments, got %#v", adjustments)
+	}
+	if adjustments[0].AmountCents != -21250 || adjustments[1].AmountCents != 7500 {
+		t.Fatalf("unexpected adjustments: %#v", adjustments)
+	}
+	if total != 50000 {
+		t.Fatalf("expected overridden total, got %d", total)
+	}
+}
+
+func TestBuildLegacyAdjustmentsRequiresGratisRate(t *testing.T) {
+	if _, _, err := buildLegacyAdjustments(nil, []string{"design=0.25"}, map[string]float64{}, 0, ""); err == nil {
+		t.Fatal("expected missing rate error")
+	}
+}

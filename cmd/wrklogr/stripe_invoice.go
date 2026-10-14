@@ -28,6 +28,79 @@ type stripeInvoiceDay struct {
 	Rate         float64
 }
 
+type stripeInvoiceAdjustment struct {
+	AmountCents int64
+	Description string
+	Metadata    map[string]string
+}
+
+func parseLegacyGratis(values []string, rates map[string]float64) ([]stripeInvoiceAdjustment, error) {
+	var adjustments []stripeInvoiceAdjustment
+	for _, value := range values {
+		parts := strings.SplitN(value, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid --gratis-days %q (use category=days)", value)
+		}
+		category := strings.ToLower(strings.TrimSpace(parts[0]))
+		days, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+		if err != nil || days < 0 {
+			return nil, fmt.Errorf("invalid gratis days %q", value)
+		}
+		rate := rates[category]
+		if rate <= 0 {
+			return nil, fmt.Errorf("no rate configured for gratis category %q", category)
+		}
+		amount := int64(math.Round(days * rate * 100))
+		if amount == 0 {
+			continue
+		}
+		adjustments = append(adjustments, stripeInvoiceAdjustment{
+			AmountCents: -amount,
+			Description: fmt.Sprintf("Gratis — %s — %.2f days at $%.2f/day", category, days, rate),
+			Metadata: map[string]string{
+				"wrklogr_adjustment": "gratis",
+				"legacy_category":    category,
+				"legacy_days":        fmt.Sprintf("%.2f", days),
+				"legacy_day_rate":    fmt.Sprintf("%.2f", rate),
+			},
+		})
+	}
+	return adjustments, nil
+}
+
+func buildLegacyAdjustments(days []stripeInvoiceDay, gratis []string, rates map[string]float64, totalOverride float64, discountNote string) ([]stripeInvoiceAdjustment, int64, error) {
+	var subtotal int64
+	for _, day := range days {
+		subtotal += day.AmountCents
+	}
+	adjustments, err := parseLegacyGratis(gratis, rates)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, adjustment := range adjustments {
+		subtotal += adjustment.AmountCents
+	}
+	if totalOverride > 0 {
+		target := int64(math.Round(totalOverride * 100))
+		if delta := target - subtotal; delta != 0 {
+			description := "Legacy total override"
+			if strings.TrimSpace(discountNote) != "" {
+				description += " — " + strings.TrimSpace(discountNote)
+			}
+			adjustments = append(adjustments, stripeInvoiceAdjustment{
+				AmountCents: delta,
+				Description: description,
+				Metadata: map[string]string{
+					"wrklogr_adjustment": "total_override",
+					"legacy_total":       fmt.Sprintf("%.2f", totalOverride),
+				},
+			})
+			subtotal = target
+		}
+	}
+	return adjustments, subtotal, nil
+}
+
 func aggregateStripeInvoiceDays(entries []noko.Entry, dayRate float64) ([]stripeInvoiceDay, error) {
 	if dayRate <= 0 {
 		return nil, fmt.Errorf("day rate must be greater than zero")
@@ -221,8 +294,10 @@ func resolveStripeAPIKey(cfg *config.RuntimeConfig, flag string) string {
 }
 
 func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra.Command {
-	var customerID, projectIDInput, sinceInput, untilInput, dayRateInput, description, rounding string
+	var customerID, projectIDInput, sinceInput, untilInput, dayRateInput, description, rounding, discountNote string
 	var stripeKey, nokoToken string
+	var gratisDays []string
+	var totalOverride float64
 	var daysUntilDue int
 	var create bool
 
@@ -295,8 +370,27 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 			if err != nil {
 				return err
 			}
+			if rounding != "legacy-quarter-day" && (len(gratisDays) > 0 || totalOverride > 0 || strings.TrimSpace(discountNote) != "") {
+				return fmt.Errorf("--gratis-days, --total-override, and --discount-note require --rounding legacy-quarter-day")
+			}
 			if len(days) == 0 {
 				return fmt.Errorf("no billable Noko entries found")
+			}
+			legacyRates := map[string]float64{"backend": rate, "frontend": rate, "design": rate, "pm": rate, "qa": rate, "other": rate}
+			if cfg.Stripe != nil && cfg.Stripe.Legacy != nil && cfg.Stripe.Legacy.Rates != nil {
+				for category, categoryRate := range cfg.Stripe.Legacy.Rates {
+					if categoryRate > 0 {
+						legacyRates[strings.ToLower(category)] = categoryRate
+					}
+				}
+			}
+			adjustments := []stripeInvoiceAdjustment(nil)
+			adjustedTotal := int64(0)
+			if rounding == "legacy-quarter-day" {
+				adjustments, adjustedTotal, err = buildLegacyAdjustments(days, gratisDays, legacyRates, totalOverride, discountNote)
+				if err != nil {
+					return err
+				}
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "customer: %s\nperiod: %s through %s\nproject: %d\n", customerID, sinceInput, untilInput, projectID)
@@ -312,6 +406,15 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 					date = "period"
 				}
 				fmt.Fprintf(out, "  %s  %.2fh  $%.2f  %s\n", date, float64(day.Minutes)/60, float64(day.AmountCents)/100, lineDescription)
+			}
+			if len(adjustments) > 0 {
+				for _, adjustment := range adjustments {
+					total += adjustment.AmountCents
+					fmt.Fprintf(out, "  adjustment  $%.2f  %s\n", float64(adjustment.AmountCents)/100, adjustment.Description)
+				}
+			}
+			if rounding == "legacy-quarter-day" && (len(gratisDays) > 0 || totalOverride > 0) {
+				total = adjustedTotal
 			}
 			fmt.Fprintf(out, "total: $%.2f\n", float64(total)/100)
 			if !create {
@@ -375,6 +478,13 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 					return fmt.Errorf("invoice %s created, but line item for %s failed: %w", invoice.ID, day.Date, err)
 				}
 			}
+			for _, adjustment := range adjustments {
+				if err := stripe.CreateInvoiceItem(context.Background(), stripeclient.CreateInvoiceItemParams{
+					Customer: customerID, Invoice: invoice.ID, Amount: adjustment.AmountCents, Currency: "usd", Description: adjustment.Description, Metadata: adjustment.Metadata,
+				}); err != nil {
+					return fmt.Errorf("invoice %s created, but adjustment %q failed: %w", invoice.ID, adjustment.Description, err)
+				}
+			}
 			fmt.Fprintf(out, "created Stripe draft: %s (not finalized or sent)\n", invoice.ID)
 			return nil
 		},
@@ -385,6 +495,9 @@ func newStripeInvoiceCmd(getConfig func() (*config.RuntimeConfig, error)) *cobra
 	cmd.Flags().StringVar(&untilInput, "until", "", "End date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&dayRateInput, "day-rate", "900", "Billing day rate in USD")
 	cmd.Flags().StringVar(&rounding, "rounding", "daily-cents", "Rounding model: daily-cents or legacy-quarter-day")
+	cmd.Flags().StringSliceVar(&gratisDays, "gratis-days", nil, "Legacy gratis deduction, repeatable as category=days (legacy-quarter-day only)")
+	cmd.Flags().Float64Var(&totalOverride, "total-override", 0, "Legacy final total override in USD (legacy-quarter-day only)")
+	cmd.Flags().StringVar(&discountNote, "discount-note", "", "Note attached to a legacy total override adjustment")
 	cmd.Flags().StringVar(&description, "description", "", "Stripe invoice description")
 	cmd.Flags().StringVar(&nokoToken, "noko-token", "", "Noko API token")
 	cmd.Flags().StringVar(&stripeKey, "stripe-key", "", "Stripe secret API key")

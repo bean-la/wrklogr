@@ -57,6 +57,25 @@ Entries with `development`, `QA`, `design`, or `PM` Noko tags are classified
 using the Bean API rules. Generated Stripe line metadata preserves raw minutes,
 category, rounded days, rate, and Noko entry IDs.
 
+The old Notion invoice's `gratis_*` and `total_override` values can be carried
+into a draft explicitly. Repeat `--gratis-days category=days` for each gratis
+row. `--total-override` adds one final positive or negative adjustment so the
+Stripe total matches the legacy total; `--discount-note` is included in that
+line's description. These flags are intentionally explicit per invoice rather
+than read from Notion:
+
+```sh
+wrklogr stripe-invoice \
+  --rounding legacy-quarter-day \
+  --gratis-days design=0.25 \
+  --total-override 5000 \
+  --discount-note "courtesy discount" \
+  ...
+```
+
+Gratis rows are negative Stripe invoice items. No adjustment is created unless
+one of these flags is provided.
+
 ## Examples
 
 Preview only:
