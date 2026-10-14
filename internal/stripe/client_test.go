@@ -74,3 +74,23 @@ func TestListInvoices(t *testing.T) {
 		t.Fatalf("unexpected invoices: %#v", invoices)
 	}
 }
+
+func TestGetInvoice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/invoices/in_test" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"id":"in_test","status":"paid","amount_due":425000,"amount_paid":425000,"paid":true,"hosted_invoice_url":"https://invoice.stripe.com/i/test","status_transitions":{"paid_at":1760000000}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("sk_test_example", server.Client())
+	client.baseURL = server.URL + "/v1"
+	invoice, err := client.GetInvoice(context.Background(), "in_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !invoice.Paid || invoice.AmountPaid != 425000 || invoice.StatusTransitions.PaidAt != 1760000000 {
+		t.Fatalf("unexpected invoice: %#v", invoice)
+	}
+}

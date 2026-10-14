@@ -126,6 +126,16 @@ STRIPE_SECRET_KEY=sk_live_... wrklogr stripe-invoice \
 
 The command prints the Stripe invoice ID and explicitly does not finalize or send it. Review the line items in Stripe, then finalize/send from the Dashboard or a separately approved automation. This makes a hosted Stripe invoice link available without exposing the client to an unreviewed invoice.
 
+After an invoice is finalized or paid, reconcile it without changing Stripe:
+
+```sh
+wrklogr stripe-invoice-status --invoice-id in_...
+```
+
+This reports the Stripe status, paid flag, due/paid amounts, payment timestamp,
+and hosted invoice URL. It is read-only and is intended for the cutover
+checklist and payment-record reconciliation.
+
 ## Migration and retirement
 
 During cutover, compare a Stripe draft against the existing Bean PDF output for one or two periods. Once the day grouping, rate, descriptions, and totals are accepted, stop creating new Notion invoices. Keep the legacy Notion/Heroku renderer read-only until historical PDFs are archived and any required links have been migrated. Then remove its credentials and hosting only after a separate retention review.

@@ -27,11 +27,19 @@ func NewClient(apiKey string, httpClient *http.Client) *Client {
 }
 
 type Invoice struct {
-	ID               string            `json:"id"`
-	Status           string            `json:"status"`
-	AmountDue        int64             `json:"amount_due"`
-	HostedInvoiceURL string            `json:"hosted_invoice_url"`
-	Metadata         map[string]string `json:"metadata"`
+	ID                string            `json:"id"`
+	Status            string            `json:"status"`
+	Number            string            `json:"number"`
+	Currency          string            `json:"currency"`
+	AmountDue         int64             `json:"amount_due"`
+	AmountPaid        int64             `json:"amount_paid"`
+	Paid              bool              `json:"paid"`
+	DueDate           int64             `json:"due_date"`
+	HostedInvoiceURL  string            `json:"hosted_invoice_url"`
+	Metadata          map[string]string `json:"metadata"`
+	StatusTransitions struct {
+		PaidAt int64 `json:"paid_at"`
+	} `json:"status_transitions"`
 }
 
 type invoiceList struct {
@@ -99,6 +107,37 @@ func (c *Client) ListInvoices(ctx context.Context, customer, status string) ([]I
 		return nil, fmt.Errorf("decode Stripe response: %w", err)
 	}
 	return out.Data, nil
+}
+
+// GetInvoice retrieves one invoice so callers can reconcile its payment state
+// and hosted URL without mutating Stripe.
+func (c *Client) GetInvoice(ctx context.Context, id string) (*Invoice, error) {
+	if id == "" {
+		return nil, fmt.Errorf("Stripe invoice ID is required")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/invoices/"+url.PathEscape(id), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create Stripe request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("User-Agent", "wrklogr/stripe-invoice")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Stripe request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read Stripe response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Stripe API error (%d): %s", resp.StatusCode, string(body))
+	}
+	var out Invoice
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decode Stripe response: %w", err)
+	}
+	return &out, nil
 }
 
 type CreateInvoiceItemParams struct {
