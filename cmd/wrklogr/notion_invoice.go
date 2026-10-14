@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path"
@@ -339,9 +340,18 @@ func fetchInvoicePipeline(ctx context.Context, cmd *cobra.Command, cfg *config.R
 		if nokoErr != nil {
 			fmt.Fprintf(os.Stderr, "warn: fetch noko entries: %v\n", nokoErr)
 		} else {
+			nokoMinutes := make(map[int]int)
 			for _, e := range entries {
+				if _, ok := aggs[e.ProjectID()]; ok {
+					nokoMinutes[e.ProjectID()] += e.Minutes
+				}
 				if agg, ok := aggs[e.ProjectID()]; ok && strings.TrimSpace(e.Description) != "" {
 					agg.NokoDescs = append(agg.NokoDescs, strings.TrimSpace(e.Description))
+				}
+			}
+			for projectID, minutes := range nokoMinutes {
+				if agg, ok := aggs[projectID]; ok {
+					agg.Minutes = minutes
 				}
 			}
 		}
@@ -398,7 +408,7 @@ func collectCreateInvoiceLines(
 		if rate == 0 {
 			rate = cfg.Notion.DefaultRate
 		}
-		days := hours / 8.0
+		days := roundedInvoiceDays(hours)
 		amount := days * rate
 		repoNames := sortedRepos(agg)
 
@@ -545,7 +555,7 @@ func collectUpdateInvoiceLine(
 	if rate == 0 {
 		rate = cfg.Notion.DefaultRate
 	}
-	days := hours / 8.0
+	days := roundedInvoiceDays(hours)
 	amount := days * rate
 	repoNames := sortedRepos(agg)
 
@@ -580,6 +590,10 @@ func collectUpdateInvoiceLine(
 		ClientPageID:  clientPageID,
 		TargetPageID:  existing.PageID,
 	}, nil
+}
+
+func roundedInvoiceDays(hours float64) float64 {
+	return math.Round((hours/8.0)*4) / 4
 }
 
 func writeCreateInvoices(cmd *cobra.Command, ctx context.Context, nc *notion.Client, cfg *config.RuntimeConfig, dryRun, attachPDF bool, snap invoiceSnapshotOpts, lines []invoiceLine) error {
